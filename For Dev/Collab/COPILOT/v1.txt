@@ -1,0 +1,15 @@
+COPILOT Browser Block - v1
+Date: 2026-08-19
+
+Completed:
+- Added adapters/browser/contract.mojo as the Mojo mirror of contracts/browser.py.
+- BrowserAdapter implements the mirrored BrowserProvider contract.
+- Browser conformance suite passes: 4 tests.
+
+Current boundary:
+- Mojo contract, projection, health, timeout, cancellation, and invalid URL behavior are implemented.
+- Real Chromium/Lightpanda process or HTTP backend integration remains pending.
+
+Next work item:
+- Inspect the available WSL/uv runtime and browser integration options before adding vendor code.
+- Keep implementation changes inside adapters/browser/.

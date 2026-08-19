@@ -1,0 +1,25 @@
+COPILOT Browser Block - v4
+Date: 2026-08-19
+
+User explicitly requested COPILOT to continue DeepSeek/model-block work.
+
+Scope for this handoff:
+- adapters/model/deepseek.mojo
+- adapters/model/ollama.mojo only where the same compiler blocker applies
+- no changes to core/, contracts/, or adapters/browser/
+
+Initial known blocker:
+- Mojo 1.0.0 rejects `from std.string import atof` in DeepSeek and Ollama.
+
+Validation target:
+- compile the affected provider files and preserve existing contract behavior.
+
+Completed:
+- Removed obsolete std.string/atof imports from deepseek.mojo and ollama.mojo.
+- Converted PythonObject timing values with the supported Float64(py=...) form.
+
+Validation:
+- deepseek.mojo compiles under Mojo 1.0.0.
+- ollama.mojo compiles under Mojo 1.0.0.
+- contract.mojo, models.mojo, and conformance.mojo compile cleanly.
+- Remaining provider diagnostics are non-fatal unused-variable warnings only.

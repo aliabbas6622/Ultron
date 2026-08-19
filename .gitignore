@@ -1,0 +1,11 @@
+.venv/
+__pycache__/
+.pytest_cache/
+tui_runs/
+*.o
+/conformance
+/contract
+/deepseek
+/models
+/ollama
+/browser

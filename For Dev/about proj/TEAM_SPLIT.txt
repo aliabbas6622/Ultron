@@ -1,0 +1,29 @@
+ULTRON V0.1 - Team Split
+Main agent (me, Claude) owns core: contracts, runtime, context compiler, policy engine, file tool, verifier, acceptance test. Do not edit core/ or contracts/ - ask main agent instead.
+
+DEEPSEEK - Model Block
+Folder: adapters/model/ only.
+Task: implement ModelProvider v1 contract (see 03_BLOCK_CONTRACT.md) - text_generation, cancellation, health, usage_reporting required.
+Do not touch adapters/browser/, core/, or contracts/.
+
+COPILOT - Browser Block
+Folder: adapters/browser/ only.
+Task: implement Browser contract (see 03_BLOCK_CONTRACT.md) - navigation, extraction, timeout, cancellation, invalid URL handling, health.
+Do not touch adapters/model/, core/, or contracts/.
+Status: Mojo contract facade and conformance suite complete; real Chromium/Lightpanda backend integration remains pending.
+
+Rules for both: read contracts/ but never edit them. No vendor logic outside your adapter folder. If a contract seems wrong/missing, flag it to main agent instead of changing it. Commit only inside your own folder.
+
+STATUS (main agent, 2026-08-19):
+- Toolchain: pixi does not ship mojo for win-64. Switched project to uv, Mojo/mblack installed inside WSL2 Debian (.venv at repo root, reachable from Windows too). Use `wsl -d Debian` then `source .venv/bin/activate` to get `mojo`/`mblack` on PATH. pixi.toml/.pixi removed; pyproject.toml (uv, bare/no-package) added instead.
+- Verified core/ Python acceptance slice: 4/4 tests pass (tests/test_acceptance_slice.py) against fake browser/model doubles. V0.1 Definition of Done checklist in 08_ACCEPTANCE_AND_ROADMAP.md is satisfied for the fake-block slice.
+- adapters/model/contract.mojo and models.mojo: fixed obsolete `fn` -> `def`, a `List[Capability]` return needing `^` transfer, `HealthStatus`/`UsageReport` field-assign needing `var ... ^` transfer (non-ImplicitlyCopyable types), and `__hash__` returning `Int(hash(...))` instead of raw `UInt64`. Both now compile clean with `mojo build --emit object`.
+
+FLAG to DEEPSEEK: adapters/model/deepseek.mojo does not compile yet under Mojo 1.0.0 stable:
+  - `comptime _httpx = Python.import_module(...)` etc. — can't call a raising function in a comptime initializer; do this at runtime (e.g. in __init__ or a cached instance field), not as a `comptime`.
+  - missing `from std.python import PythonObject`.
+  - `self.api_key = api_key^` etc. on an immutable-borrow arg — take the arg as `var api_key: String` if you intend to transfer it, or drop the `^` and assign directly.
+  - same `List[Capability]` return needs `return caps^` (see contract.mojo fix above).
+  Also still has `fn` throughout — needs the same `fn` -> `def` pass as contract.mojo/models.mojo got.
+
+FLAG to COPILOT: adapters/browser/ is now browser.mojo + conformance.mojo (was browser.py + test_browser.py). contracts/browser.py (the Python Protocol contract) hasn't moved — if the browser block is now Mojo, either mirror the contract in Mojo the way adapters/model/contract.mojo does, or clarify how core/ (Python) is meant to call a Mojo adapter. Flag back to main agent before building further on this, per the contract-first rule in 09_CODING_STANDARDS.md.

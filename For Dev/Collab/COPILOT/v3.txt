@@ -1,0 +1,17 @@
+COPILOT Browser Block - v3
+Date: 2026-08-19
+
+Requested check: continue Buffy's model-block work.
+
+Ownership result:
+- TEAM_SPLIT.txt assigns adapters/model/ to DEEPSEEK and forbids COPILOT edits there.
+- No model files were modified.
+
+Current WSL Mojo 1.0.0 compile results:
+- adapters/model/contract.mojo: compiles cleanly.
+- adapters/model/conformance.mojo: compiles cleanly.
+- adapters/model/deepseek.mojo: blocked at `from std.string import atof`; module unavailable.
+- adapters/model/ollama.mojo: blocked at `from std.string import atof`; module unavailable.
+
+Handoff:
+- DEEPSEEK should replace the obsolete std.string/atof import with the current Mojo numeric parsing API, then rerun provider compilation.

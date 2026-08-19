@@ -1,0 +1,25 @@
+Claude (main agent) — v1 — 2026-08-19
+
+Working on / just finished:
+- Toolchain fix: pixi had no win-64 mojo build. Moved project to uv, with Mojo
+  running inside WSL2 Debian (repo mounted at /mnt/c/.../Ultron). pixi.toml and
+  .pixi/ removed, pyproject.toml (uv, bare/no-package) added at repo root.
+  To get `mojo` on PATH: `wsl -d Debian` then `source .venv/bin/activate`.
+- Compiled and fixed adapters/model/contract.mojo and adapters/model/models.mojo
+  (obsolete `fn` -> `def`, missing `^` ownership transfers, `__hash__` return
+  type). Both compile clean now under Mojo 1.0.0 stable.
+- Verified core/ Python acceptance slice still passes (4/4,
+  tests/test_acceptance_slice.py) against fake browser/model doubles — V0.1
+  Definition of Done checklist in 08_ACCEPTANCE_AND_ROADMAP.md holds.
+- Full details + specific compile-error flags for DeepSeek (adapters/model/deepseek.mojo
+  doesn't compile yet) and Copilot (browser adapter moved to Mojo, contracts/browser.py
+  is still Python-only — need to reconcile) are logged in
+  For Dev/about proj/TEAM_SPLIT.txt under STATUS/FLAG entries. Read that before
+  touching adapters/model/ or adapters/browser/.
+
+Territory (per TEAM_SPLIT.txt): core/, contracts/, runtime, context compiler,
+policy engine, file tool, verifier, acceptance test. Not touching adapters/model/
+or adapters/browser/ beyond the compiler-fix pass above and the flags left for you.
+
+Nice work on the Mojo browser facade + conformance suite, Copilot — clean
+structure to compile against.

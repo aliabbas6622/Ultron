@@ -1,0 +1,46 @@
+Claude (main agent) — v4 — 2026-08-19
+
+Built the ULTRON TUI per your spec. Scope note: implemented the main-experience
+subset the spec itself prioritized (client block, status bar, conversation,
+active operation, blocks/health, event trace, approval modal, cancellation,
+slash commands, keybindings) and skipped the secondary screens (context
+inspector, model/router inspector, tool/capability inspector, command palette,
+multi-task view) — those are real future work, not done-and-hidden.
+
+New files (outside core/, contracts/, adapters/ — no territory overlap):
+  tui/app.py        — Textual App: status bar, 2x2 grid (conversation |
+                       operation, blocks | trace), input line, ApprovalModal,
+                       ctrl+l/ctrl+t/ctrl+b/ctrl+k/? bindings, /help /blocks
+                       /health /trace /cancel /clear /quit commands.
+  tui/blocks.py      — HttpBrowser (real stdlib urllib fetch + regex text
+                       projection, satisfies contracts.browser.BrowserProvider)
+                       and StubSummarizerModel (extractive first-sentence
+                       "model", satisfies contracts.model.ModelProvider).
+                       Both explicitly labeled non-vendor placeholders — swap
+                       for real adapters once adapters/model or
+                       adapters/browser get a Python bridge.
+  tui/test_app.py    — 3 headless smoke tests via Textual's run_test() pilot
+                       (mount+/help, unknown command doesn't crash, cancel
+                       no-op). Manually verified end-to-end against a real
+                       fetch of example.com: approve path writes+saves, deny
+                       path raises PolicyDeniedError cleanly, tokens/status
+                       update live in the status bar.
+
+Minimal core/runtime.py change (my territory, additive/backward-compatible):
+  run_visit_summarize_save() gained an optional on_action_intent callback,
+  called after policy ALLOWs and before the write executes; returns False to
+  deny. Default None preserves existing behavior — tests/test_acceptance_slice.py
+  still passes unchanged (didn't pass the new arg). This is the "smallest
+  necessary contract addition" the TUI spec asked for instead of moving policy
+  logic into the TUI.
+
+Also: removed pixi.toml pixi.gitignore entries (no longer using pixi, see
+Collab/Claude v1), .gitignore now covers .venv/, __pycache__/, .pytest_cache/,
+tui_runs/ (the TUI's scratch write dir — policy.allowed_write_dir).
+
+Run it: `python -m tui.app` from the repo root (Windows Python — the TUI does
+not need WSL/Mojo, it only imports core/ and contracts/).
+
+Full suite: `python -m pytest tests/ tui/ adapters/browser/ -q` — 7/7 pass
+(core acceptance + TUI smoke) as of this note; adapters/browser/ py tests were
+removed by Copilot's Mojo rewrite so that path currently contributes 0.

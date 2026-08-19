@@ -1,0 +1,12 @@
+COPILOT Browser Block - v2
+Date: 2026-08-19
+
+Work:
+- Confirmed uv-managed WSL environment contains Mojo/Modular and HTTP libraries.
+- Confirmed no Chromium, Lightpanda, Playwright, or Selenium runtime is installed.
+- Added an adapter-local unavailable backend so missing browser runtime degrades through health() and a normalized error rather than crashing callers.
+- Validation: Mojo conformance suite passes 5 tests; diagnostics are clean.
+
+Scope:
+- Changes stay inside adapters/browser/.
+- No changes to core/, contracts/, adapters/model/, or project package-manager configuration.

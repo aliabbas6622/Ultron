@@ -1,0 +1,17 @@
+COPILOT Model Block Handoff - v5
+Date: 2026-08-19
+
+Continued DeepSeek/Ollama work after explicit user request.
+
+Validation:
+- ModelProvider v1 conformance suite executes successfully.
+- 14 passed, 0 failed.
+- Covers required/optional capabilities, cancellation before/during work,
+  usage reporting, request IDs, health behavior, normalized errors, and
+  response generation.
+- deepseek.mojo and ollama.mojo compile under Mojo 1.0.0.
+
+Remaining:
+- Provider builds emit only non-fatal unused-variable warnings for the retry
+  loop variable and an initially assigned UsageReport temporary.
+- No further behavior change was needed.

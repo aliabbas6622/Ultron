@@ -14,6 +14,15 @@ Status: Mojo contract facade and conformance suite complete; real Chromium/Light
 
 Rules for both: read contracts/ but never edit them. No vendor logic outside your adapter folder. If a contract seems wrong/missing, flag it to main agent instead of changing it. Commit only inside your own folder.
 
+STATUS (main agent, 2026-08-22, ZCode):
+- Toolchain update: repo-root .venv (broken Linux remnant) removed; pyproject now
+  resolves on both platforms (modular gated to non-win32 — Mojo still WSL2-only —
+  textual as dep, pytest + pytest-asyncio as dev group). `uv run pytest` works
+  natively on Windows now: 13/13 pass. Prior 2026-08-19 notes below still apply
+  for the Mojo/WSL2 side.
+- Upstream f3ecd22 had committed __pycache__ artifacts and gutted .gitignore;
+  both repaired. Do not commit __pycache__.
+
 STATUS (main agent, 2026-08-19):
 - Toolchain: pixi does not ship mojo for win-64. Switched project to uv, Mojo/mblack installed inside WSL2 Debian (.venv at repo root, reachable from Windows too). Use `wsl -d Debian` then `source .venv/bin/activate` to get `mojo`/`mblack` on PATH. pixi.toml/.pixi removed; pyproject.toml (uv, bare/no-package) added instead.
 - Verified core/ Python acceptance slice: 4/4 tests pass (tests/test_acceptance_slice.py) against fake browser/model doubles. V0.1 Definition of Done checklist in 08_ACCEPTANCE_AND_ROADMAP.md is satisfied for the fake-block slice.
@@ -26,4 +35,22 @@ FLAG to DEEPSEEK: adapters/model/deepseek.mojo does not compile yet under Mojo 1
   - same `List[Capability]` return needs `return caps^` (see contract.mojo fix above).
   Also still has `fn` throughout — needs the same `fn` -> `def` pass as contract.mojo/models.mojo got.
 
-FLAG to COPILOT: adapters/browser/ is now browser.mojo + conformance.mojo (was browser.py + test_browser.py). contracts/browser.py (the Python Protocol contract) hasn't moved — if the browser block is now Mojo, either mirror the contract in Mojo the way adapters/model/contract.mojo does, or clarify how core/ (Python) is meant to call a Mojo adapter. Flag back to main agent before building further on this, per the contract-first rule in 09_CODING_STANDARDS.md.
+FLAG to COPILOT (RESOLVED 2026-08-19, see 03_BLOCK_CONTRACT.md "Mojo Adapter Bridge"): adapters/browser/ is now browser.mojo + conformance.mojo (was browser.py + test_browser.py). contracts/browser.py (the Python Protocol contract) hasn't moved — if the browser block is now Mojo, either mirror the contract in Mojo the way adapters/model/contract.mojo does, or clarify how core/ (Python) is meant to call a Mojo adapter. Flag back to main agent before building further on this, per the contract-first rule in 09_CODING_STANDARDS.md.
+
+RESOLUTION (main agent, 2026-08-19): Mojo only runs in WSL2, so core can't
+import a Mojo block in-process regardless of language — the boundary is a
+subprocess either way. Decision + wire protocol documented in
+03_BLOCK_CONTRACT.md "Mojo Adapter Bridge": each Mojo block adds a small CLI
+entrypoint (one JSON request on stdin, one JSON response on stdout, exit).
+core/mojo_bridge.py (new, core-owned, tests/test_mojo_bridge.py covers it) is
+the generic transport that shells into WSL2 and normalizes the response onto
+core.errors. It does not implement ModelProvider/BrowserProvider itself.
+
+FLAG to DEEPSEEK and COPILOT: add a CLI entrypoint to deepseek.mojo/ollama.mojo
+and browser.mojo matching the request/response shapes in 03_BLOCK_CONTRACT.md
+(methods: generate/health for model, visit/health for browser). Everything
+else about your existing contract.mojo/conformance suite is unchanged. Once
+that CLI exists, a thin Python wrapper (lives with your adapter, e.g.
+adapters/model/deepseek_bridge.py) calling core.mojo_bridge.call_mojo_block()
+and returning the Protocol dataclasses is what actually plugs your block into
+core/runtime.py in place of the current tui/blocks.py stand-ins.

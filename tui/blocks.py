@@ -1,19 +1,21 @@
-"""Demo blocks for the TUI: a real (stdlib-only) HTTP browser and a stub extractive
-"model". Neither is a vendor adapter — adapters/model and adapters/browser are Mojo
-and not bridged to Python yet (see For Dev/Collab). These exist so the TUI has
-something real to drive today; swap for real ModelProvider/BrowserProvider
-implementations once that bridge lands. ponytail: regex HTML stripping, not a real
-parser — good enough for the V0.1 "one sentence" projection, swap for html.parser
-if a page's structure actually matters.
+"""Demo blocks for the TUI: a real (stdlib-only) HTTP browser, an Ollama-backed
+model (talks to a local `ollama serve` over HTTP — no Mojo/WSL bridge needed,
+Ollama already speaks HTTP), and a stub extractive "model" fallback. None of
+these are the vendor Mojo adapters in adapters/model — see For Dev/Collab for
+that bridge's status. ponytail: regex HTML stripping, not a real parser — good
+enough for the V0.1 "one sentence" projection, swap for html.parser if a
+page's structure actually matters.
 """
 
 from __future__ import annotations
 
+import json
+import os
 import re
 import time
 import urllib.error
 import urllib.request
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 from contracts.browser import HealthStatus as BrowserHealth
 from contracts.browser import PageProjection
@@ -84,3 +86,50 @@ class StubSummarizerModel:
 
     def health(self) -> ModelHealth:
         return ModelHealth(healthy=True, detail="extractive stub, not an LLM")
+
+
+@dataclass
+class OllamaModel:
+    """ModelProvider backed by a local `ollama serve` (http://localhost:11434).
+    Install: https://ollama.com — then `ollama pull <model>` and `ollama serve`
+    (the desktop app runs serve for you). No WSL/Mojo bridge involved; Ollama
+    already exposes a plain HTTP API."""
+
+    block_id: str = "ollama"
+    model: str = field(default_factory=lambda: os.environ.get("OLLAMA_MODEL", "llama3.2"))
+    base_url: str = field(default_factory=lambda: os.environ.get("OLLAMA_URL", "http://localhost:11434"))
+    capabilities: ModelCapabilities = field(default_factory=ModelCapabilities)
+
+    def generate(self, run: RunContext, prompt: str) -> ModelResult:
+        run.check_alive()
+        body = json.dumps({"model": self.model, "prompt": prompt, "stream": False}).encode("utf-8")
+        req = urllib.request.Request(
+            f"{self.base_url}/api/generate", data=body, headers={"Content-Type": "application/json"}
+        )
+        try:
+            with urllib.request.urlopen(req, timeout=120) as resp:
+                data = json.loads(resp.read().decode("utf-8"))
+        except (urllib.error.URLError, TimeoutError, OSError, ValueError) as exc:
+            raise BlockUnavailableError(f"ollama generate failed ({self.model} @ {self.base_url}): {exc}") from exc
+
+        run.check_alive()
+        text = data.get("response", "").strip()
+        if not text:
+            raise BlockUnavailableError(f"ollama returned empty response: {data}")
+        return ModelResult(
+            text=text,
+            input_tokens=data.get("prompt_eval_count", 0),
+            output_tokens=data.get("eval_count", 0),
+            finish_reason=data.get("done_reason", "stop"),
+        )
+
+    def health(self) -> ModelHealth:
+        try:
+            with urllib.request.urlopen(f"{self.base_url}/api/tags", timeout=3) as resp:
+                tags = json.loads(resp.read().decode("utf-8")).get("models", [])
+        except (urllib.error.URLError, TimeoutError, OSError, ValueError) as exc:
+            return ModelHealth(healthy=False, detail=f"ollama unreachable at {self.base_url}: {exc}")
+        names = [m.get("name", "") for m in tags]
+        if names and not any(n.startswith(self.model) for n in names):
+            return ModelHealth(healthy=False, detail=f"model {self.model!r} not pulled; have {names}")
+        return ModelHealth(healthy=True, detail=f"ollama @ {self.base_url}, model={self.model}")

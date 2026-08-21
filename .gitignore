@@ -1,6 +1,13 @@
-# Project status file
-PROJECT_STATUS.md
+# Python
+__pycache__/
+*.py[cod]
 
-Wait, I need to reconsider. The PROJECT_STATUS.md is an added source file, not a build artifact or temporary file, so it should not be added to .gitignore. Since only a markdown file was added and no build artifacts, dependencies, or temp files are present in the changes, the .gitignore should remain empty.
+# Environments
+.venv/
+.pixi/
 
-(empty)
+# Test / tooling caches
+.pytest_cache/
+
+# Run artifacts
+tui_runs/

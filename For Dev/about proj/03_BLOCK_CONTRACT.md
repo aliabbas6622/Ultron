@@ -118,3 +118,42 @@ Core may import contract definitions.
 Core must not import vendor implementations.
 
 CI should enforce this mechanically where possible.
+
+## Mojo Adapter Bridge
+
+Core is Python. Mojo runs only inside WSL2 (no native Windows host run), so
+core cannot import a Mojo block in-process on any platform where the host is
+Windows. The bridge is a subprocess, not a language question.
+
+Contract: each Mojo block ships a CLI entrypoint that does exactly one
+request/response round trip over stdio, then exits.
+
+```text
+stdin  (one line): {"method": "<method_name>", ...method args}
+stdout (one line): {"ok": true, ...result fields}
+              or:  {"ok": false, "error": "<code>", "detail": "<string>"}
+```
+
+`error` codes map onto `core.errors`: `cancelled`, `deadline_exceeded`,
+`block_unavailable`, `contract_violation`. Anything else normalizes to
+`block_unavailable`.
+
+Method shapes (ModelProvider v1 / BrowserProvider v1):
+
+```text
+generate  in:  {"method": "generate", "prompt": str, "deadline_at": float|null}
+          out: {"ok": true, "text": str, "input_tokens": int, "output_tokens": int, "finish_reason": str}
+
+visit     in:  {"method": "visit", "url": str, "timeout_s": float}
+          out: {"ok": true, "url": str, "title": str, "text": str, "truncated": bool}
+
+health    in:  {"method": "health"}
+          out: {"ok": true, "healthy": bool, "detail": str}
+```
+
+`core/mojo_bridge.py` is the generic, block-agnostic transport (spawns the
+WSL process, enforces the timeout, parses/normalizes the response). It is
+core-owned infrastructure, not a vendor implementation. A thin per-block
+Python wrapper that calls it and returns `ModelProvider`/`BrowserProvider`
+dataclasses is still required to actually satisfy those Protocols, and that
+wrapper lives with the adapter, not in core.

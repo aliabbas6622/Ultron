@@ -3,5 +3,20 @@ name = "ultron"
 version = "0.1.0"
 requires-python = ">=3.11"
 dependencies = [
-    "modular[mojo]>=26.5.0",
+    # Mojo/MAX toolchain — Linux/macOS wheels only, so it lives in the WSL2
+    # side of the split. Windows-side dev (pytest, TUI) must not need it.
+    "modular>=26.5.0; sys_platform != 'win32'",
+    "textual>=0.80",
+]
+
+[dependency-groups]
+dev = [
+    "pytest>=8.3",
+    "pytest-asyncio>=0.24",
+]
+
+[tool.uv]
+required-environments = [
+    "sys_platform == 'win32' and platform_machine == 'AMD64'",
+    "sys_platform == 'linux' and platform_machine == 'x86_64'",
 ]

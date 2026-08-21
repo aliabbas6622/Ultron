@@ -2,10 +2,11 @@
 
 Client block only: owns no runtime truth. It builds a RunContext + EventBus,
 calls core.runtime.run_visit_summarize_save on a worker thread, and renders
-whatever events/state come back. Swap tui/blocks.py's HttpBrowser/
-StubSummarizerModel for real ModelProvider/BrowserProvider adapters once
-adapters/model and adapters/browser are bridged to Python — nothing else here
-should need to change (core.runtime is the only import from the runtime side).
+whatever events/state come back. Model is tui.blocks.OllamaModel when a local
+`ollama serve` is reachable, else the extractive StubSummarizerModel fallback
+(see _select_model below). Swap for the vendor Mojo adapters/model once that's
+bridged to Python — nothing else here should need to change (core.runtime is
+the only import from the runtime side).
 
 Run: python -m tui.app
 """
@@ -31,7 +32,16 @@ from core.events import ModelCompleted, ModelStarted, PolicyDenied, ToolComplete
 from core.policy import PolicyEngine
 from core.run_context import RunContext
 from core.runtime import run_visit_summarize_save
-from tui.blocks import HttpBrowser, StubSummarizerModel
+from tui.blocks import HttpBrowser, OllamaModel, StubSummarizerModel
+
+
+def _select_model():
+    """Ollama if it's up and has the configured model pulled, else the extractive stub.
+    ponytail: health-checked once per call, not cached — cheap local HTTP GET."""
+    ollama = OllamaModel()
+    if ollama.health().healthy:
+        return ollama
+    return StubSummarizerModel()
 
 RUNS_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "tui_runs")
 
@@ -176,14 +186,15 @@ class UltronTUI(App[None]):
 
     def _blocks_text(self) -> str:
         browser_h = HttpBrowser().health()
-        model_h: ModelHealth = StubSummarizerModel().health()
+        model = _select_model()
+        model_h: ModelHealth = model.health()
         b_color = _HEALTH_COLOR[browser_h.healthy]
         m_color = _HEALTH_COLOR[model_h.healthy]
         return (
             "[b]Blocks / Health[/b]\n\n"
             f"browser.http_stub    [{b_color}]{'healthy' if browser_h.healthy else 'unhealthy'}[/{b_color}]  "
             f"({browser_h.detail})\n"
-            f"model.extractive     [{m_color}]{'healthy' if model_h.healthy else 'unhealthy'}[/{m_color}]  "
+            f"model.{model.block_id:<13} [{m_color}]{'healthy' if model_h.healthy else 'unhealthy'}[/{m_color}]  "
             f"({model_h.detail})"
         )
 
@@ -261,7 +272,7 @@ class UltronTUI(App[None]):
                 run=run,
                 bus=bus,
                 browser=HttpBrowser(),
-                model=StubSummarizerModel(),
+                model=_select_model(),
                 policy=policy,
                 url=url,
                 output_path=output_path,

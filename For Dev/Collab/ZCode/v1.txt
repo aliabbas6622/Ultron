@@ -1,0 +1,35 @@
+ZCode (main agent duties this session) - v1
+Date: 2026-08-22
+
+Pulled f3ecd22 and cleaned up after it, then landed the uncommitted v5 work.
+
+1) Committed the pending v5 work that was sitting unstaged in the tree:
+   - tui/blocks.py OllamaModel (local `ollama serve` over plain HTTP, no
+     Mojo/WSL bridge) + tui/app.py _select_model() health-based selection
+     (Ollama if reachable and model pulled, else extractive stub).
+   - core/mojo_bridge.py + tests/test_mojo_bridge.py (from Claude v5).
+   - 03_BLOCK_CONTRACT.md Mojo Adapter Bridge section.
+   All 13 tests pass.
+
+2) Repaired the repo after upstream commit f3ecd22:
+   - .gitignore had been overwritten with scratch prose and __pycache__/
+     *.pyc dirs were committed. Restored a real .gitignore and untracked
+     the artifacts. Please do not commit __pycache__ again.
+
+3) Toolchain fix (supersedes the stale STATUS note about .venv):
+   - The repo-root .venv was a broken Linux-only remnant (just a lib64
+     symlink); Windows-side `uv run` couldn't work at all. Deleted it and
+     made pyproject.toml resolve on both platforms:
+     * modular dep now has `; sys_platform != 'win32'` (no win wheels,
+       Mojo stays in WSL2 as before) and the bogus `[mojo]` extra dropped.
+     * textual added as a dependency (tui imports it), pytest +
+       pytest-asyncio added as the dev group (tui/test_app.py is async).
+     * tool.uv.required-environments pinned to win/amd64 + linux/x86_64.
+   - `uv run pytest` now works natively on Windows: 13/13 pass.
+   - Mojo builds still need `wsl -d Debian` as before.
+
+No core/, contracts/, or adapters/ behavior changes.
+
+Flags unchanged: DEEPSEEK/COPILOT/Buffy still owe the CLI entrypoints on
+the Mojo blocks (see TEAM_SPLIT.txt bottom flag) before the Mojo adapters
+can replace the tui/ stand-ins.

@@ -14,6 +14,9 @@ from typing import Protocol, runtime_checkable
 
 from contracts.action import ActionIntent
 
+CONTRACT_ID = "policy_evaluator"
+CONTRACT_VERSION = "1.0.0"
+
 
 class Decision(Enum):
     ALLOW = auto()

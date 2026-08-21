@@ -3076,7 +3076,7 @@ wheels = [
 [[package]]
 name = "ultron"
 version = "0.1.0"
-source = { virtual = "." }
+source = { editable = "." }
 dependencies = [
     { name = "modular", marker = "sys_platform != 'win32'" },
     { name = "textual" },

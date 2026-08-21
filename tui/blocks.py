@@ -133,3 +133,13 @@ class OllamaModel:
         if names and not any(n.startswith(self.model) for n in names):
             return ModelHealth(healthy=False, detail=f"model {self.model!r} not pulled; have {names}")
         return ModelHealth(healthy=True, detail=f"ollama @ {self.base_url}, model={self.model}")
+
+
+def select_model(model_name: str | None = None):
+    """Pick the model brick: Ollama if it's up (and has the model pulled), else the
+    extractive stub. ponytail: health-checked once per call, not cached — cheap local
+    HTTP GET. Shared by the TUI and the headless CLI."""
+    ollama = OllamaModel(model=model_name) if model_name else OllamaModel()
+    if ollama.health().healthy:
+        return ollama
+    return StubSummarizerModel()

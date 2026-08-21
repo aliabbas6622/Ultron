@@ -1,0 +1,29 @@
+ZCode (main agent) - v4
+Date: 2026-08-22
+
+Installed ULTRON as a real terminal command (user request). 48/48 tests pass.
+
+- tui/cli.py: the `ultron` console entry. Subcommands:
+    ultron                -> interactive TUI (same as before)
+    ultron run <url> [-o FILE] [--model NAME] [--timeout S]
+                          -> headless vertical slice: fetch, summarize, save,
+                             verify. Structured JSON events + metrics on stderr,
+                             summary on stdout. Exit 0 ok / 1 normalized failure.
+    ultron health         -> block health table (exit 1 if any block unhealthy)
+    ultron version        -> version + shipped contract list
+  Headless mode is the same LEGO composition as the TUI: HttpBrowser +
+  select_model() + FileTool + FileVerifier injected into the runtime.
+- tui/blocks.py: select_model() shared by TUI + CLI (Ollama if reachable,
+  else extractive stub). tui/app.py now uses it.
+- pyproject: now an installable package (hatchling, packages contracts/core/
+  tools/tui, [project.scripts] ultron = tui.cli:main). uv sync installs it
+  into the repo venv; `uv tool install --editable .` put a global `ultron`
+  on PATH (C:\Users\aliab\.local\bin\ultron.exe) that tracks the repo.
+- contracts/policy.py gained CONTRACT_ID/CONTRACT_VERSION like every other
+  contract (version listing needs it).
+- tests/test_cli.py: offline CLI coverage (success path writes + exit 0,
+  browser-down exit 1 with normalized error, health, version).
+
+Verified live from a neutral directory: ultron version / health / run
+https://example.com - end-to-end real fetch, summary saved, verified,
+latency + token metrics reported.

@@ -15,6 +15,10 @@ Status: Mojo contract facade and conformance suite complete; real Chromium/Light
 Rules for both: read contracts/ but never edit them. No vendor logic outside your adapter folder. If a contract seems wrong/missing, flag it to main agent instead of changing it. Commit only inside your own folder.
 
 STATUS (main agent, 2026-08-22, ZCode):
+- `ultron` is now an installed terminal command (tui/cli.py; hatchling package
+  + [project.scripts]). `ultron` = TUI, `ultron run <url> -o FILE` = headless
+  slice with metrics, `ultron health`, `ultron version`. Global install via
+  `uv tool install --editable .` (tracks the repo). See Collab/ZCode/v4.txt.
 - LEGO-BRICK refactor: contracts/ is self-contained (no core imports), new
   contracts tool.py/verification.py/policy.py, new tools/ package (FileTool +
   FileVerifier bricks, contracts-only deps). core/ is pure composition - the

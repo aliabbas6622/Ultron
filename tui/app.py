@@ -32,18 +32,10 @@ from core.events import ModelCompleted, ModelStarted, PolicyDenied, ToolComplete
 from core.policy import PolicyEngine
 from core.run_context import RunContext
 from core.runtime import run_visit_summarize_save
-from tui.blocks import HttpBrowser, OllamaModel, StubSummarizerModel
+from tui.blocks import HttpBrowser
 from tools.file_tool import FileTool
 from tools.file_verifier import FileVerifier
-
-
-def _select_model():
-    """Ollama if it's up and has the configured model pulled, else the extractive stub.
-    ponytail: health-checked once per call, not cached — cheap local HTTP GET."""
-    ollama = OllamaModel()
-    if ollama.health().healthy:
-        return ollama
-    return StubSummarizerModel()
+from tui.blocks import select_model as _select_model
 
 RUNS_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "tui_runs")
 

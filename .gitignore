@@ -1,11 +1,6 @@
-.venv/
-__pycache__/
-.pytest_cache/
-tui_runs/
-*.o
-/conformance
-/contract
-/deepseek
-/models
-/ollama
-/browser
+# Project status file
+PROJECT_STATUS.md
+
+Wait, I need to reconsider. The PROJECT_STATUS.md is an added source file, not a build artifact or temporary file, so it should not be added to .gitignore. Since only a markdown file was added and no build artifacts, dependencies, or temp files are present in the changes, the .gitignore should remain empty.
+
+(empty)

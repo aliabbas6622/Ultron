@@ -15,7 +15,7 @@ from dataclasses import dataclass
 
 from contracts.errors import BlockUnavailableError
 from contracts.health import HealthStatus
-from contracts.model import ModelCapabilities, ModelResult
+from contracts.model import ModelCapabilities, ModelResult, ToolCall
 
 _REQUEST_TIMEOUT_S = 120.0
 
@@ -110,7 +110,7 @@ class OpenAICompatModel:
 
     def __post_init__(self) -> None:
         if self.capabilities is None:
-            self.capabilities = ModelCapabilities(prompt_cache=True)
+            self.capabilities = ModelCapabilities(prompt_cache=True, tool_calling=True)
 
     def _endpoints(self) -> tuple[str, str]:
         base = self.base_url.rstrip("/")
@@ -119,20 +119,54 @@ class OpenAICompatModel:
         return f"{base}/v1/chat/completions", f"{base}/v1/models"
 
     def generate(self, run, prompt: str) -> ModelResult:
+        return self._generate(run, prompt)
+
+    def generate_with_tools(self, run, prompt: str, tools: list) -> ModelResult:
+        """Native OpenAI function calling: ToolDescriptors become `tools`, response
+        tool_calls become contracts ToolCall proposals (still unauthorized until policy)."""
+        payload_tools = [
+            {
+                "type": "function",
+                "function": {
+                    "name": d.kind,
+                    "description": d.description or d.name,
+                    "parameters": d.params_schema or {"type": "object", "properties": {}},
+                },
+            }
+            for d in tools
+        ]
+        return self._generate(run, prompt, tools=payload_tools, parse_tool_calls=True)
+
+    def _generate(self, run, prompt: str, tools: list | None = None, parse_tool_calls: bool = False) -> ModelResult:
         run.check_alive()
         chat_url, _ = self._endpoints()
-        status, data = _request_json(
-            chat_url,
-            body={"model": self.model, "messages": [{"role": "user", "content": prompt}]},
-            headers=_bearer(self.api_key),
-        )
+        body: dict = {"model": self.model, "messages": [{"role": "user", "content": prompt}]}
+        if tools:
+            body["tools"] = tools
+            body["tool_choice"] = "auto"
+        status, data = _request_json(chat_url, body=body, headers=_bearer(self.api_key))
         run.check_alive()
-        text = ""
+
+        message: dict = {}
         if isinstance(data, dict):
             choices = data.get("choices") or []
             if choices:
-                text = str(choices[0].get("message", {}).get("content", "")).strip()
-        if status != 200 or not text:
+                message = choices[0].get("message", {}) or {}
+        text = str(message.get("content", "")).strip()
+
+        tool_calls: tuple[ToolCall, ...] = ()
+        if parse_tool_calls and message.get("tool_calls"):
+            calls = []
+            for call in message["tool_calls"]:
+                function = call.get("function", {}) or {}
+                try:
+                    params = json.loads(function.get("arguments") or "{}")
+                except ValueError:
+                    params = {"_unparseable_arguments": str(function.get("arguments"))[:200]}
+                calls.append(ToolCall(kind=str(function.get("name", "")), params=params))
+            tool_calls = tuple(calls)
+
+        if status != 200 or (not text and not tool_calls):
             raise BlockUnavailableError(
                 f"{self.block_id} generate failed ({self.model}, http {status}): {data}"
             )
@@ -141,9 +175,10 @@ class OpenAICompatModel:
             text=text,
             input_tokens=int(usage.get("prompt_tokens", 0)),
             output_tokens=int(usage.get("completion_tokens", 0)),
-            finish_reason="stop",
+            finish_reason="tool_calls" if tool_calls else "stop",
             cached_tokens=int(usage.get("prompt_tokens_details", {}).get("cached_tokens", 0))
             if isinstance(usage.get("prompt_tokens_details"), dict) else 0,
+            tool_calls=tool_calls,
         )
 
     def health(self) -> HealthStatus:

@@ -30,28 +30,41 @@ FILE_WRITE_PARAMS_SCHEMA: dict = {
 @dataclass
 class FileTool:
     """Executes kind="file_write" intents. Overwrites the target atomically enough
-    for V0.x (single write call); the runtime's Verifier confirms the effect."""
+    for V0.x (single write call); the runtime's Verifier confirms the effect.
+
+    base_dir: relative paths resolve under it BEFORE policy evaluation, so an
+    agent proposing "notes.txt" lands in the workspace, not the process CWD.
+    Policy still gates the resolved absolute path — this is convenience, not a
+    bypass."""
 
     block_id: str = "tool.file"
-    allowed_dir: str | None = None  # optional second layer; policy is the real gate
+    base_dir: str | None = None
 
     def describe(self) -> list[ToolDescriptor]:
+        note = f" Paths resolve under {self.base_dir}." if self.base_dir else ""
         return [
             ToolDescriptor(
                 kind="file_write",
                 name="file_write",
                 risk_class="side_effect",
-                description="Write content to a file path.",
+                description=f"Write content to a file path.{note}",
                 params_schema=FILE_WRITE_PARAMS_SCHEMA,
             )
         ]
+
+    def _resolve(self, path: str) -> str:
+        import os
+
+        if self.base_dir and not os.path.isabs(path):
+            return os.path.join(self.base_dir, path)
+        return path
 
     def execute(self, run, intent: ActionIntent) -> ToolResult:
         run.check_alive()
         if intent.kind != "file_write":
             raise ContractViolationError(f"{self.block_id}: cannot execute intent kind {intent.kind!r}")
         try:
-            path = intent.params["path"]
+            path = self._resolve(str(intent.params["path"]))
             content = intent.params["content"]
         except KeyError as exc:
             return ToolResult(

@@ -98,6 +98,26 @@ ToolProvider v1 contract in brief:
 - `action_id` is the idempotency key: re-executing the same intent must leave
   the same final state (duplicate side-effect retry safety).
 
+## Agent Loop (how chat uses the bricks)
+
+core/agent.py — one agentic exchange over ANY v1 model:
+
+```text
+model proposal  (native ToolCallingModel capability AND/OR text ACTION lines)
+  -> ActionIntent -> PolicyEvaluator   (allow | deny; deny feeds back as observation)
+  -> optional host approval hook (side-effect risk classes only)
+  -> ToolProvider.execute -> Verifier.verify (kind-matched, evidence-based)
+  -> observation -> back to the model, bounded MAX_TOOL_ROUNDS
+```
+
+Guarantees that hold on every transport: the model never authorizes itself,
+unverifiable claims surface as observations, rounds are bounded, unknown or
+malformed proposals are rejected without execution. `ModelResult.tool_calls`
+(contracts.model.ToolCall) carries native proposals; both transports hit the
+identical policy gate. Chat writes are workspace-contained: relative
+file_write paths resolve under the policy's allowed dir (PolicyEngine) and
+the tool's base_dir — containment, not CWD luck.
+
 ## Conformance Suites
 
 Each contract must ship tests that every implementation must pass.

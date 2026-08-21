@@ -15,6 +15,14 @@ Status: Mojo contract facade and conformance suite complete; real Chromium/Light
 Rules for both: read contracts/ but never edit them. No vendor logic outside your adapter folder. If a contract seems wrong/missing, flag it to main agent instead of changing it. Commit only inside your own folder.
 
 STATUS (main agent, 2026-08-22, ZCode):
+- AGENTIC CHAT landed: core/agent.py loop (propose -> policy -> optional
+  approval -> tool -> verify -> observe, bounded rounds). New tool brick
+  tools/web_fetch.py (read-only, projected text). Native function calling via
+  optional ToolCallingModel protocol (contracts/model.py) with automatic
+  fallback to the text ACTION protocol — both transports policy-gated.
+  Chat file writes contained to ~/.ultron/workspace (relative paths resolve
+  under the policy dir). Live-verified with gemma4:31b-cloud: agentic
+  file_write (verified on disk) + agentic web_fetch. See ZCode/v6.txt.
 - Providers + chat landed (Hermes-style): providers/ package (grab-and-go,
   contracts-only) with Ollama local / Ollama Cloud / OpenAI-compatible bricks,
   TOML registry in ~/.ultron/providers.toml, secrets via SecretStore contract.

@@ -266,12 +266,25 @@ class UltronTUI(App[None]):
         self.run_worker(lambda: self._do_chat(run, text), thread=True, name="ultron-chat")
 
     def _do_chat(self, run: RunContext, text: str) -> None:
-        from core.chat import chat_turn
+        from core.agent import agent_turn
+        from tools.file_tool import FileTool
+        from tools.file_verifier import FileVerifier
+        from tools.web_fetch import WebFetchTool
 
+        home = os.environ.get("ULTRON_HOME", os.path.join(os.path.expanduser("~"), ".ultron"))
+        workspace = os.path.join(home, "workspace")
+        os.makedirs(workspace, exist_ok=True)
         memory = self._open_memory()
         try:
-            answer = chat_turn(run, _select_model(), self._chat_history, text, memory=memory)
-            self.call_from_thread(self._on_chat_done, text, answer, None)
+            outcome = agent_turn(
+                run, _select_model(), self._chat_history, text,
+                policy=PolicyEngine(allowed_write_dir=workspace),
+                tools=[FileTool(base_dir=workspace), WebFetchTool()],
+                verifiers=[FileVerifier()],
+                memory=memory,
+                on_action=self._request_approval,  # side effects ask the user first
+            )
+            self.call_from_thread(self._on_chat_done, text, outcome, None)
         except Exception as exc:  # noqa: BLE001 — UI must survive any block failure
             self.call_from_thread(self._on_chat_done, text, None, exc)
         finally:
@@ -290,12 +303,20 @@ class UltronTUI(App[None]):
         except Exception:  # noqa: BLE001 — memory is optional
             return None
 
-    def _on_chat_done(self, user_text: str, answer, error) -> None:
+    def _on_chat_done(self, user_text: str, outcome, error) -> None:
+        log = self.query_one("#conversation", RichLog)
         if error is not None:
-            self.query_one("#conversation", RichLog).write(f"[red]{type(error).__name__}:[/red] {error}")
+            log.write(f"[red]{type(error).__name__}:[/red] {error}")
             return
+        answer = outcome.answer
         self._chat_history.extend([ChatMessage(role="user", text=user_text), answer])
-        self.query_one("#conversation", RichLog).write(f"[b]ultron>[/b] {answer.text}")
+        for denial in outcome.denials:
+            log.write(f"[yellow][denied][/yellow] {denial}")
+        for intent, result in zip(outcome.actions, outcome.results):
+            mark = "green" if result.ok else "red"
+            target = result.outputs.get("path") or result.outputs.get("url") or ""
+            log.write(f"[{mark}]{intent.kind}[/{mark}] -> {target}")
+        log.write(f"[b]ultron>[/b] {answer.text}")
 
     def _start_run(self, url: str) -> None:
         if self._active_run is not None:

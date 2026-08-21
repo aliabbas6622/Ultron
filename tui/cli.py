@@ -31,10 +31,27 @@ from tui import __version__
 from tui.blocks import HttpBrowser, select_model
 
 MEMORY_DB = os.path.join(os.environ.get("ULTRON_HOME", os.path.join(os.path.expanduser("~"), ".ultron")), "memory.db")
+WORKSPACE_DIR = os.path.join(os.environ.get("ULTRON_HOME", os.path.join(os.path.expanduser("~"), ".ultron")), "workspace")
 
 
 def _resolve_model(model_name: str | None = None):
     return select_model(model_name)
+
+
+def _agent_tools(no_tools: bool):
+    """The chat agent's tool belt: policy-gated file writes (contained to the
+    workspace) + read-only web fetch."""
+    from tools.file_tool import FileTool
+    from tools.web_fetch import WebFetchTool
+
+    return [] if no_tools else [FileTool(base_dir=WORKSPACE_DIR), WebFetchTool()]
+
+
+def _agent_policy(no_tools: bool):
+    from core.policy import PolicyEngine
+
+    os.makedirs(WORKSPACE_DIR, exist_ok=True)
+    return PolicyEngine(allowed_write_dir=WORKSPACE_DIR)
 
 
 def _open_memory():
@@ -92,29 +109,45 @@ def _cmd_run(args: argparse.Namespace) -> int:
 
 
 def _cmd_ask(args: argparse.Namespace) -> int:
-    from core.chat import chat_turn
+    from core.agent import agent_turn
 
     run = RunContext()
     model = _resolve_model(args.model)
     memory = _open_memory() if not args.no_memory else None
     try:
-        answer = chat_turn(run, model, [], args.text, memory=memory, system=args.system)
+        outcome = agent_turn(
+            run, model, [], args.text,
+            policy=_agent_policy(args.no_tools), tools=_agent_tools(args.no_tools),
+            verifiers=_agent_verifiers(args.no_tools), memory=memory, system=args.system,
+        )
     except UltronError as exc:
         print(f"FAILED [{type(exc).__name__}]: {exc}", file=sys.stderr)
         return 1
     finally:
         if memory is not None:
             memory.close()
-    print(answer.text)
+    print(outcome.answer.text)
+    for denial in outcome.denials:
+        print(f"[denied] {denial}", file=sys.stderr)
     return 0
 
 
+def _agent_verifiers(no_tools: bool):
+    from tools.file_verifier import FileVerifier
+
+    return [] if no_tools else [FileVerifier()]
+
+
 def _cmd_chat(args: argparse.Namespace) -> int:
-    from core.chat import ChatMessage, chat_turn
+    from core.agent import agent_turn
+    from core.chat import ChatMessage
 
     registry = ProviderRegistry.load()
     model = _resolve_model(args.model)
     memory = _open_memory() if not args.no_memory else None
+    tools = _agent_tools(args.no_tools)
+    policy = _agent_policy(args.no_tools)
+    verifiers = _agent_verifiers(args.no_tools)
     history: list[ChatMessage] = []
     run = RunContext()
     who = f"{model.block_id}"
@@ -123,7 +156,8 @@ def _cmd_chat(args: argparse.Namespace) -> int:
         if registry.default_model:
             who += f"/{registry.default_model}"
         who += ")"
-    print(f"ULTRON chat — {who}. /exit to quit, /clear to reset, /memory to toggle recall.")
+    mode = "agent (tools: " + ", ".join(sorted({d.kind for t in tools for d in t.describe()})) + ")" if tools else "chat"
+    print(f"ULTRON {mode} — {who}. /exit /clear /memory /tools. Writes land in {WORKSPACE_DIR}")
     while True:
         try:
             text = input("you> ").strip()
@@ -138,6 +172,11 @@ def _cmd_chat(args: argparse.Namespace) -> int:
             history.clear()
             print("(history cleared; long-term memory persists)")
             continue
+        if text == "/tools":
+            for tool in tools:
+                for d in tool.describe():
+                    print(f"  {d.kind}: {d.description} [{d.risk_class}]")
+            continue
         if text == "/memory":
             if memory is None:
                 print("memory unavailable — continuing without recall")
@@ -148,13 +187,19 @@ def _cmd_chat(args: argparse.Namespace) -> int:
                     print(f"  {record.observed_at:.0f}s ago: {record.value[:160]}")
             continue
         try:
-            answer = chat_turn(run, model, history, text, memory=memory)
+            outcome = agent_turn(run, model, history, text, policy=policy, tools=tools,
+                                 verifiers=verifiers, memory=memory)
         except UltronError as exc:
             print(f"[{type(exc).__name__}] {exc}")
             continue
         history.append(ChatMessage(role="user", text=text))
-        history.append(answer)
-        print(f"ultron> {answer.text}")
+        history.append(outcome.answer)
+        for denial in outcome.denials:
+            print(f"  [denied] {denial}")
+        for intent, result in zip(outcome.actions, outcome.results):
+            mark = "+" if result.ok else "x"
+            print(f"  [{mark}] {intent.kind} -> {result.outputs.get('path') or result.outputs.get('url') or ''}")
+        print(f"ultron> {outcome.answer.text}")
         if memory is not None:
             memory.close()
             memory = _open_memory()  # one connection per turn keeps the REPL reentrant
@@ -281,16 +326,18 @@ def build_parser() -> argparse.ArgumentParser:
     p_run.add_argument("--timeout", type=float, default=30.0, help="browser timeout seconds")
     p_run.set_defaults(func=_cmd_run)
 
-    p_ask = sub.add_parser("ask", help="one-shot question to the default provider")
+    p_ask = sub.add_parser("ask", help="one-shot question (tools enabled) to the default provider")
     p_ask.add_argument("text", help="the question / prompt")
     p_ask.add_argument("--model", default=None, help="model name override")
     p_ask.add_argument("--system", default=None, help="optional system instruction")
     p_ask.add_argument("--no-memory", action="store_true", help="skip memory write/recall for this question")
+    p_ask.add_argument("--no-tools", action="store_true", help="plain chat, no tool loop")
     p_ask.set_defaults(func=_cmd_ask)
 
-    p_chat = sub.add_parser("chat", help="multi-turn chat REPL with persistent memory")
+    p_chat = sub.add_parser("chat", help="agentic multi-turn REPL: tools + persistent memory")
     p_chat.add_argument("--model", default=None, help="model name override")
     p_chat.add_argument("--no-memory", action="store_true", help="disable persistent memory")
+    p_chat.add_argument("--no-tools", action="store_true", help="plain chat, no tool loop")
     p_chat.set_defaults(func=_cmd_chat)
 
     p_prov = sub.add_parser("providers", help="manage model providers")

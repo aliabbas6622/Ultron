@@ -1,0 +1,37 @@
+ZCode (main agent) - v6
+Date: 2026-08-22
+
+Agentic chat: the model can now ACT, not just talk. 73/73 tests pass; live
+end-to-end verified with the user's gemma4:31b-cloud (agentic file write
+verified on disk + agentic web fetch + summarized).
+
+- contracts/model.py: ToolCall + ModelResult.tool_calls + optional
+  ToolCallingModel protocol (runtime_checkable). Backward compatible.
+- providers/models.py: OpenAICompatModel.generate_with_tools (native OpenAI
+  function calling; ToolDescriptors -> tools, tool_calls -> ToolCall).
+  capabilities.tool_calling=True.
+- core/agent.py: the loop. Proposals arrive natively OR as text ACTION lines
+  (some models answer native-tools prompts in text - both are parsed, both
+  hit the identical policy gate). Native transport falls back to text on
+  BlockUnavailableError. Bounded MAX_TOOL_ROUNDS=4. Denials/verification
+  failures/unknown kinds/malformed ACTION lines become SYSTEM observations,
+  never crashes. Side-effect risk classes can require host approval
+  (on_action hook - the TUI shows its approval modal); read-only kinds don't.
+  Memory recall/write same as chat.
+- tools/web_fetch.py: read-only WebFetchTool brick (projected text, no raw
+  HTML, head/script/style stripped, scheme-gated). Fixed the same head-leak
+  in tui HttpBrowser's projection.
+- core/policy.py: web_fetch rule (http/https only) + relative file_write
+  paths now resolve UNDER the allowed dir (containment, not CWD luck).
+- tools/file_tool.py: base_dir for relative-path resolution, matching policy.
+- CLI: ask/chat are agentic (tools: file_write + web_fetch; workspace
+  ~/.ultron/workspace); --no-tools for plain chat; /tools lists the belt;
+  denials + tool results printed per turn.
+- TUI: chat path runs the agent loop with the approval modal for side
+  effects; tool lines render in the conversation.
+- tests/test_agent.py: policy-only effect path, denial feedback, unknown
+  kind, malformed retry, bounded rounds, native path, approval denial,
+  tampered-write verification, web fetch projection/scheme/policy.
+
+Next candidates: streaming (v2 optional capability), skills loop, richer
+TUI, MCP external tools as ToolProvider bricks, browser block upgrade.

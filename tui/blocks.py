@@ -22,6 +22,7 @@ from core.errors import BlockUnavailableError
 from core.run_context import RunContext
 
 _TAG_RE = re.compile(r"<(script|style)[^>]*>.*?</\1>", re.IGNORECASE | re.DOTALL)
+_HEAD_RE = re.compile(r"<head[^>]*>.*?</head>", re.IGNORECASE | re.DOTALL)
 _ANY_TAG_RE = re.compile(r"<[^>]+>")
 _TITLE_RE = re.compile(r"<title[^>]*>(.*?)</title>", re.IGNORECASE | re.DOTALL)
 _WS_RE = re.compile(r"\s+")
@@ -47,6 +48,7 @@ class HttpBrowser:
         title_match = _TITLE_RE.search(raw)
         title = _WS_RE.sub(" ", title_match.group(1)).strip() if title_match else url
         body = _TAG_RE.sub(" ", raw)
+        body = _HEAD_RE.sub(" ", body)
         body = _ANY_TAG_RE.sub(" ", body)
         text = _WS_RE.sub(" ", body).strip()
         truncated = len(text) > 4000

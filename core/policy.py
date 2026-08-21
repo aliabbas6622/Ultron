@@ -19,20 +19,28 @@ class PolicyResult(PolicyDecision):
 
 
 class PolicyEngine:
-    """V0.1: single rule set for file_write. ponytail: no ask/sandbox/constrain modes yet,
-    add when a second ActionIntent kind needs finer-grained handling than allow/deny."""
+    """V0.1 rule set: file_write (path-gated side effect) + web_fetch (read-only,
+    scheme-gated). ponytail: no ask/sandbox/constrain modes yet, add when a tool
+    needs finer-grained handling than allow/deny."""
 
     def __init__(self, allowed_write_dir: str) -> None:
         self._allowed_write_dir = allowed_write_dir
 
     def evaluate(self, intent: ActionIntent) -> PolicyResult:
-        if intent.kind != "file_write":
-            return PolicyResult(Decision.DENY, f"unknown action kind: {intent.kind}")
+        if intent.kind == "file_write":
+            path = intent.params.get("path", "")
+            abs_allowed = os.path.abspath(self._allowed_write_dir)
+            # relative paths mean "inside the allowed dir" — resolve there, so an
+            # agent proposing "notes.txt" is contained, not CWD-dependent
+            abs_target = os.path.abspath(path if os.path.isabs(path) else os.path.join(abs_allowed, path))
+            if os.path.commonpath([abs_target, abs_allowed]) != abs_allowed:
+                return PolicyResult(Decision.DENY, f"path outside allowed dir: {path}")
+            return PolicyResult(Decision.ALLOW)
 
-        path = intent.params.get("path", "")
-        abs_target = os.path.abspath(path)
-        abs_allowed = os.path.abspath(self._allowed_write_dir)
-        if os.path.commonpath([abs_target, abs_allowed]) != abs_allowed:
-            return PolicyResult(Decision.DENY, f"path outside allowed dir: {path}")
+        if intent.kind == "web_fetch":
+            url = str(intent.params.get("url", ""))
+            if not (url.startswith("http://") or url.startswith("https://")):
+                return PolicyResult(Decision.DENY, f"unsupported URL scheme: {url!r}")
+            return PolicyResult(Decision.ALLOW)
 
-        return PolicyResult(Decision.ALLOW)
+        return PolicyResult(Decision.DENY, f"unknown action kind: {intent.kind}")

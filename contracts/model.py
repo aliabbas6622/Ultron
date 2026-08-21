@@ -28,6 +28,7 @@ class ModelResult:
     input_tokens: int
     output_tokens: int
     finish_reason: str
+    cached_tokens: int = 0  # prompt-cache hit tokens, reported for eval metrics
 
 
 @dataclass(frozen=True)

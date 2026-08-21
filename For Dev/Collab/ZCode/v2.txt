@@ -1,0 +1,47 @@
+ZCode (main agent) - v2
+Date: 2026-08-22
+
+Completed the remaining V0.1 brief from "For Dev/about proj" and started V0.2.
+41/41 tests pass (`uv run pytest`, Windows-native venv from v1).
+
+V0.1 completions (all core-owned, no adapters/ or tui/ behavior changes):
+- core/instructions.py: versioned instruction bundles (id/version/content_hash/
+  role/cache_class/token_count per 05). The slice's task + page-frame prompts
+  are now bundles, not inline strings; every run records the bundle versions
+  used in RunContext.metadata["instructions"].
+- core/telemetry.py: RunMetrics (08's full metric list: success, verification,
+  in/out/cached tokens, latency, retries, tool calls, cost, context breakdown,
+  instruction versions) + MetricsRecorder (bus-subscribing) + log_json/
+  attach_bus_logger structured JSON logging per 09 (no secrets/payloads).
+- core/eval_harness.py: the 08 "Eval Harness - V0.1" - deterministic Scenario
+  fixtures (route/policy/side-effect grading), ReplayBrowser/ReplayModel
+  frozen-response doubles, freeze() pins a compiled-prompt hash as a replay
+  contract, summarize() aggregation. tests/test_eval_harness.py.
+- tests/test_dependency_direction.py: the 05-required CI gate - core/contracts
+  import stdlib+core+contracts only, never adapters/tui, never third-party.
+- tests/test_failure_modes.py: 09's remaining in-scope categories - provider
+  unavailable, verification failure (event + raise), duplicate side-effect
+  retry idempotency, malformed tool result, prompt-injection containment
+  (injected page text cannot reach the effect path; only the caller-chosen
+  file is written). Rate-limit/memory-unavailable/MCP need blocks V0.1
+  doesn't have - noted on the roadmap, not silently skipped.
+- contracts/model.py: ModelResult.cached_tokens (defaulted, non-breaking).
+  core/events.py: ModelCompleted.cached_tokens. Runtime passes it through and
+  publishes VerificationFailed events on verification failure.
+- RunContext: trust_context + metadata fields (02 run concepts).
+- 08 checklist: all 13 items checked with pointers to the tests that prove
+  each. Context compiler now emits a per-section breakdown.
+
+V0.2 start (roadmap says this is next after V0.1 passes - it does):
+- contracts/memory.py: MemoryProvider v1 + MemoryRecord with the full 06 field
+  list (provenance, confidence, temporal validity, supersedes, contradictions,
+  content_hash) and the 7 memory kinds.
+- core/memory_sqlite.py: SQLite dev backend (04 allows SQLite for local
+  testing; PostgreSQL is still the default target). Migrations from day one:
+  schema_migrations table + append-only MIGRATIONS list. Deterministic
+  conflict ordering: importance DESC, observed_at DESC, id ASC; superseded
+  records excluded; contradictions are links, not deletions.
+- tests/test_memory_conformance.py: the 03-required conformance suite.
+
+REMAINS for V0.2: PostgreSQL/pgvector backend, memory->context-compiler wiring.
+Unchanged flags: DEEPSEEK/COPILOT/Buffy still owe the Mojo CLI entrypoints.

@@ -15,3 +15,7 @@ def new_trace_id() -> str:
 
 def new_action_id() -> str:
     return f"action_{uuid.uuid4().hex}"
+
+
+def new_memory_id() -> str:
+    return f"mem_{uuid.uuid4().hex}"

@@ -59,8 +59,13 @@ class RunContext:
     run_id: str = field(default_factory=new_run_id)
     trace_id: str = field(default_factory=new_trace_id)
     owner_id: str | None = None
+    trust_context: str = "owner"  # 02: owner | trusted | untrusted worker, etc. policy may consult
     deadline_at: float | None = None  # epoch seconds
     budget: Budget = field(default_factory=Budget)
+    # cross-cutting run record: instruction bundle versions used, context
+    # breakdown, verification outcome. Populated by the runtime, read by
+    # telemetry/eval (05: "Every run should record the instruction versions used").
+    metadata: dict = field(default_factory=dict)
     _cancelled: bool = field(default=False, repr=False)
 
     def cancel(self) -> None:

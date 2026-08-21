@@ -15,6 +15,14 @@ Status: Mojo contract facade and conformance suite complete; real Chromium/Light
 Rules for both: read contracts/ but never edit them. No vendor logic outside your adapter folder. If a contract seems wrong/missing, flag it to main agent instead of changing it. Commit only inside your own folder.
 
 STATUS (main agent, 2026-08-22, ZCode):
+- V0.1 brief fully closed (eval harness, telemetry, versioned instruction
+  bundles, dependency-direction CI test, failure-mode tests - see
+  08_ACCEPTANCE_AND_ROADMAP.md checked checklist + Collab/ZCode/v2.txt).
+  41/41 tests pass on Windows via `uv run pytest`.
+- V0.2 started core-owned: contracts/memory.py (MemoryProvider v1) +
+  core/memory_sqlite.py (SQLite dev backend, day-one migrations) +
+  conformance suite. PostgreSQL backend still open (needs a running server;
+  flag to main agent if you want it wired to a specific instance).
 - Toolchain update: repo-root .venv (broken Linux remnant) removed; pyproject now
   resolves on both platforms (modular gated to non-win32 — Mojo still WSL2-only —
   textual as dep, pytest + pytest-asyncio as dev group). `uv run pytest` works

@@ -16,9 +16,17 @@ from contracts.model import ModelProvider
 from core.action_intent import ActionIntent
 from core.bus import EventBus
 from core.context_compiler import compile_context
-from core.errors import PolicyDeniedError
-from core.events import ModelCompleted, ModelStarted, PolicyDenied, ToolCompleted, ToolRequested
+from core.errors import PolicyDeniedError, VerificationFailedError
+from core.events import (
+    ModelCompleted,
+    ModelStarted,
+    PolicyDenied,
+    ToolCompleted,
+    ToolRequested,
+    VerificationFailed,
+)
 from core.file_tool import execute_file_write
+from core.instructions import PAGE_FRAME_TEMPLATE, TASK_VISIT_SUMMARIZE
 from core.policy import Decision, PolicyEngine
 from core.run_context import RunContext
 from core.verifier import verify_file_write
@@ -48,7 +56,11 @@ def run_visit_summarize_save(
     page = browser.visit(run, url, timeout_s)
 
     run.check_alive()
-    ctx = compile_context(task="Determine in one sentence what the page is for.", page=page)
+    ctx = compile_context(task=TASK_VISIT_SUMMARIZE.content, page=page)
+    run.metadata.setdefault("instructions", []).extend(
+        [TASK_VISIT_SUMMARIZE.record_id(), PAGE_FRAME_TEMPLATE.record_id()]
+    )
+    run.metadata["context_breakdown"] = dict(ctx.breakdown)
 
     run.check_alive()
     bus.publish(ModelStarted(run_id=run.run_id, trace_id=run.trace_id, block_id=model.block_id))
@@ -63,6 +75,7 @@ def run_visit_summarize_save(
             block_id=model.block_id,
             input_tokens=result.input_tokens,
             output_tokens=result.output_tokens,
+            cached_tokens=result.cached_tokens,
         )
     )
 
@@ -95,6 +108,14 @@ def run_visit_summarize_save(
         ToolCompleted(run_id=run.run_id, trace_id=run.trace_id, action_id=intent.action_id, ok=True, result=write_result)
     )
 
-    verify_file_write(write_result, expected_content=summary)
+    try:
+        verify_file_write(write_result, expected_content=summary)
+    except VerificationFailedError as exc:
+        run.metadata["verification_ok"] = False
+        bus.publish(
+            VerificationFailed(run_id=run.run_id, trace_id=run.trace_id, action_id=intent.action_id, reason=str(exc))
+        )
+        raise
+    run.metadata["verification_ok"] = True
 
     return SliceResult(summary=summary, output_path=write_result.path)

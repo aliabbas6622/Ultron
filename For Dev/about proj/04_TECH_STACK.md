@@ -83,3 +83,10 @@ Large immutable data:
 TOML for normal configuration.
 
 Secrets through a `SecretStore` contract.
+
+Implemented (providers): `<ULTRON_HOME>/providers.toml` (default `~/.ultron`)
+holds the provider registry — kinds `ollama`, `ollama-cloud`,
+`openai-compatible` — and `<ULTRON_HOME>/secrets.json` is the SecretStore
+(`contracts/secret_store.py`, owner-only perms, referenced by name, never
+logged, never committed). Manage via `ultron providers add|edit|remove|
+default|test` or the `providers.registry.ProviderRegistry` API.

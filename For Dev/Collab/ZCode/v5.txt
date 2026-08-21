@@ -1,0 +1,41 @@
+ZCode (main agent) - v5
+Date: 2026-08-22
+
+Providers + chat + memory-backed conversations. 61/61 tests pass. Everything
+stays LEGO: providers/ is grab-and-go (contracts/ only, no core).
+
+New pieces:
+- contracts/secret_store.py: SecretStore v1 (get/set/delete/list).
+- providers/ (main-agent owned):
+  - models.py: OllamaLocalModel (native /api), OpenAICompatModel
+    (/v1/chat/completions; covers ollama-cloud with Bearer key, DeepSeek,
+    Groq, OpenRouter, vLLM...). All failures normalize to BlockUnavailableError;
+    401/403 health maps to "invalid api key".
+  - registry.py: ProviderRegistry - TOML config at <ULTRON_HOME>/providers.toml
+    (ULTRON_HOME, default ~/.ultron), FileSecretStore at secrets.json (0600
+    best effort), add/edit/remove/set_default/build factory, default model
+    resolution (default_model > provider model).
+- core/chat.py: chat_turn over ANY v1 brick (conversation + optional recalled
+  episodic memory compiled into the prompt - deterministic, replay-friendly);
+  exchanges stored to a MemoryProvider; a failing memory block degrades to
+  no-recall, never kills chat.
+- CLI: `ultron providers list|add|edit|remove|default|test [--generate]`,
+  `ultron ask "..."` (one-shot), `ultron chat` (REPL: /exit /clear /memory;
+  persistent across processes via ~/.ultron/memory.db).
+- TUI: free text chats with the default provider (URLs still run the slice);
+  /providers lists the registry; /clear also resets chat history.
+- tui/blocks.py: OllamaModel superseded by providers.OllamaLocalModel;
+  select_model() now resolves through the registry with stub fallback.
+- tests: test_providers.py (registry CRUD + secret lifecycle + mocked-HTTP
+  bricks), test_chat.py (prompt determinism, multi-turn, cross-session recall,
+  exploding-memory degradation). Dependency-direction gate extended to
+  providers/ (contracts+providers+stdlib, never core).
+
+Configured for the user (live-verified): default ollama-cloud /
+gemma4:31b-cloud; key stored in the user's SecretStore at ~/.ultron/secrets.json
+- never in the repo. `ultron providers test --generate` -> 'pong' via the real
+model; cross-session memory recall verified in two separate chat processes.
+
+Next candidates toward Hermes-parity (not started): skills loop, tool-calling
+contract (v2 optional capability), streaming, web-search tool brick, richer
+TUI chat view. The ActionIntent/ToolProvider base they'd build on is in.

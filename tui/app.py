@@ -27,6 +27,7 @@ from textual.widgets import Button, Footer, Input, Label, RichLog, Static
 from contracts.model import HealthStatus as ModelHealth
 from core.action_intent import ActionIntent
 from core.bus import EventBus
+from core.chat import ChatMessage
 from core.errors import PolicyDeniedError, UltronError
 from core.events import ModelCompleted, ModelStarted, PolicyDenied, ToolCompleted, ToolRequested
 from core.policy import PolicyEngine
@@ -136,6 +137,7 @@ class UltronTUI(App[None]):
         self._active_run: RunContext | None = None
         self._view = _RunView()
         self._start_time = 0.0
+        self._chat_history: list[ChatMessage] = []
 
     def compose(self) -> ComposeResult:
         yield Static(self._status_text(), id="status")
@@ -205,8 +207,10 @@ class UltronTUI(App[None]):
             return
         if text.startswith("/"):
             self._handle_command(text)
-        else:
+        elif text.startswith(("http://", "https://")):
             self._start_run(text)
+        else:
+            self._start_chat(text)
 
     def _handle_command(self, text: str) -> None:
         cmd, _, arg = text.partition(" ")
@@ -217,21 +221,81 @@ class UltronTUI(App[None]):
             self.action_cancel_run()
         elif cmd == "/clear":
             log.clear()
+            self._chat_history.clear()
         elif cmd == "/blocks" or cmd == "/health":
             self.query_one("#blocks", Static).update(self._blocks_text())
             log.write("[dim]blocks/health refreshed[/dim]")
+        elif cmd == "/providers":
+            try:
+                from providers.registry import ProviderRegistry
+
+                reg = ProviderRegistry.load()
+                log.write(f"[b]providers[/b] (config: {reg.config_path})")
+                for name, spec in reg.specs.items():
+                    mark = "*" if name == reg.default_provider else " "
+                    log.write(f"{mark} {spec.to_row()}")
+                log.write("[dim]manage from a terminal: ultron providers add|edit|remove|default|test[/dim]")
+            except Exception as exc:  # noqa: BLE001
+                log.write(f"[red]providers unavailable:[/red] {exc}")
         elif cmd == "/trace":
             self.action_focus_trace()
         elif cmd == "/help":
             log.write(
-                "[b]Commands[/b]  /help /blocks /health /trace /cancel /clear /quit\n"
+                "[b]Commands[/b]  /help /blocks /health /providers /trace /cancel /clear /quit\n"
                 "[b]Keys[/b]      ctrl+l input  ctrl+t trace  ctrl+b blocks  ctrl+k cancel run\n"
-                "Type a URL (http/https) to run: visit -> summarize -> save."
+                "Type anything to chat with the default provider (memory persists),\n"
+                "or a URL (http/https) to run: visit -> summarize -> save."
             )
         else:
             log.write(f"[red]unknown command:[/red] {cmd}")
 
     # -- run lifecycle ------------------------------------------------------
+
+    # -- chat lifecycle ------------------------------------------------------
+
+    def _start_chat(self, text: str) -> None:
+        if self._active_run is not None:
+            self.query_one("#conversation", RichLog).write("[yellow]busy — /cancel first[/yellow]")
+            return
+        run = RunContext()
+        self._active_run = run
+        self._view = _RunView(run_id=run.run_id, url="(chat)", status="chatting")
+        self._refresh_status()
+        log = self.query_one("#conversation", RichLog)
+        log.write(f"[b]you>[/b] {text}")
+        self.run_worker(lambda: self._do_chat(run, text), thread=True, name="ultron-chat")
+
+    def _do_chat(self, run: RunContext, text: str) -> None:
+        from core.chat import chat_turn
+
+        memory = self._open_memory()
+        try:
+            answer = chat_turn(run, _select_model(), self._chat_history, text, memory=memory)
+            self.call_from_thread(self._on_chat_done, text, answer, None)
+        except Exception as exc:  # noqa: BLE001 — UI must survive any block failure
+            self.call_from_thread(self._on_chat_done, text, None, exc)
+        finally:
+            if memory is not None:
+                memory.close()
+            self._active_run = None
+
+    @staticmethod
+    def _open_memory():
+        try:
+            from core.memory_sqlite import SqliteMemoryStore
+
+            home = os.environ.get("ULTRON_HOME", os.path.join(os.path.expanduser("~"), ".ultron"))
+            os.makedirs(home, exist_ok=True)
+            return SqliteMemoryStore(os.path.join(home, "memory.db"))
+        except Exception:  # noqa: BLE001 — memory is optional
+            return None
+
+    def _on_chat_done(self, user_text: str, answer, error) -> None:
+        if error is not None:
+            self.query_one("#conversation", RichLog).write(f"[red]{type(error).__name__}:[/red] {error}")
+            return
+        self._chat_history.extend([ChatMessage(role="user", text=user_text), answer])
+        self.query_one("#conversation", RichLog).write(f"[b]ultron>[/b] {answer.text}")
 
     def _start_run(self, url: str) -> None:
         if self._active_run is not None:

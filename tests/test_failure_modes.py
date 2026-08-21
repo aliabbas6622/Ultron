@@ -11,19 +11,20 @@ import os
 
 import pytest
 
+from contracts.action import ActionIntent
 from contracts.browser import HealthStatus as BrowserHealth
 from contracts.browser import PageProjection
+from contracts.errors import BlockUnavailableError, ContractViolationError, ToolExecutionError
 from contracts.model import HealthStatus as ModelHealth
 from contracts.model import ModelCapabilities, ModelResult
-from core.action_intent import ActionIntent
+from contracts.tool import ToolResult
 from core.bus import EventBus
-from core.errors import BlockUnavailableError, VerificationFailedError
 from core.events import VerificationFailed as VerificationFailedEvent
-from core.file_tool import execute_file_write
 from core.policy import PolicyEngine
 from core.run_context import RunContext
 from core.runtime import run_visit_summarize_save
-from core.verifier import verify_file_write
+from tools.file_tool import FileTool
+from tools.file_verifier import FileVerifier
 
 
 class OkBrowser:
@@ -80,6 +81,7 @@ def test_provider_unavailable_normalizes_and_writes_nothing(tmp_path):
     with pytest.raises(BlockUnavailableError):
         run_visit_summarize_save(
             run=run, bus=bus, browser=OkBrowser(), model=UnavailableModel(), policy=policy,
+            tool=FileTool(), verifier=FileVerifier(),
             url="https://example.com", output_path=output_path,
         )
     assert not os.path.isfile(output_path)
@@ -87,30 +89,49 @@ def test_provider_unavailable_normalizes_and_writes_nothing(tmp_path):
     assert events == []
 
 
-def test_verification_failure_publishes_event_and_raises(tmp_path, monkeypatch):
+def test_verification_failure_publishes_event_and_raises(tmp_path):
     run, bus, policy, output_path = _run(tmp_path)
     events = []
     bus.subscribe(VerificationFailedEvent, events.append)
 
-    import core.runtime as runtime_module
+    class LyingTool(FileTool):
+        """Simulates a tool claiming ok while writing something else."""
 
-    def tampered_write(intent):
-        with open(intent.params["path"], "w", encoding="utf-8") as f:
-            f.write("tampered content")  # simulate a tool lying about what it wrote
-        from core.file_tool import FileWriteResult
+        def execute(self, run, intent):
+            result = super().execute(run, intent)
+            with open(intent.params["path"], "w", encoding="utf-8") as f:
+                f.write("tampered content")  # tool lies; verifier must catch it
+            return result
 
-        return FileWriteResult(action_id=intent.action_id, path=intent.params["path"], bytes_written=16)
-
-    monkeypatch.setattr(runtime_module, "execute_file_write", tampered_write)
-
-    with pytest.raises(VerificationFailedError):
+    with pytest.raises(Exception) as excinfo:
         run_visit_summarize_save(
             run=run, bus=bus, browser=OkBrowser(), model=OkModel(), policy=policy,
+            tool=LyingTool(), verifier=FileVerifier(),
             url="https://example.com", output_path=output_path,
         )
+    from contracts.errors import VerificationFailedError
+
+    assert isinstance(excinfo.value, VerificationFailedError)
     assert len(events) == 1
     assert "mismatch" in events[0].reason
     assert run.metadata["verification_ok"] is False
+
+
+def test_failed_tool_result_raises_tool_execution_error(tmp_path):
+    run, bus, policy, output_path = _run(tmp_path)
+
+    class FailingTool(FileTool):
+        def execute(self, run, intent):
+            run.check_alive()
+            return ToolResult(ok=False, action_id=intent.action_id, kind=intent.kind, error="disk full")
+
+    with pytest.raises(ToolExecutionError, match="disk full"):
+        run_visit_summarize_save(
+            run=run, bus=bus, browser=OkBrowser(), model=OkModel(), policy=policy,
+            tool=FailingTool(), verifier=FileVerifier(),
+            url="https://example.com", output_path=output_path,
+        )
+    assert not os.path.isfile(output_path)
 
 
 def test_duplicate_side_effect_retry_is_idempotent(tmp_path):
@@ -119,29 +140,41 @@ def test_duplicate_side_effect_retry_is_idempotent(tmp_path):
     # content-idempotent, and the policy decision is deterministic on retry.
     tmp = str(tmp_path)
     policy = PolicyEngine(allowed_write_dir=tmp)
+    tool = FileTool()
+    verifier = FileVerifier()
+    run = RunContext()
     intent = ActionIntent(kind="file_write", params={"path": os.path.join(tmp, "summary.txt"), "content": "same answer"})
 
     assert policy.evaluate(intent).decision.name == "ALLOW"
-    first = execute_file_write(intent)
+    first = tool.execute(run, intent)
     assert policy.evaluate(intent).decision.name == "ALLOW"  # retry not auto-approved differently
-    second = execute_file_write(intent)
+    second = tool.execute(run, intent)
 
     assert first.action_id == second.action_id  # idempotency key survives the retry
+    assert verifier.verify(run, intent, second).verified
     with open(intent.params["path"], encoding="utf-8") as f:
         assert f.read() == "same answer"  # no duplicated/appended content
 
 
 def test_malformed_tool_result_is_rejected(tmp_path):
+    run = RunContext()
+    tool = FileTool()
     intent = ActionIntent(kind="http_request", params={"url": "https://example.com"})
-    with pytest.raises(ValueError, match="cannot execute intent kind"):
-        execute_file_write(intent)
+    with pytest.raises(ContractViolationError, match="cannot execute intent kind"):
+        tool.execute(run, intent)
 
-    # and a FileWriteResult pointing at a file that doesn't exist fails verification
-    from core.file_tool import FileWriteResult
+    # missing params normalize to a failed ToolResult, not a crash
+    bad = ActionIntent(kind="file_write", params={"path": "x.txt"})
+    result = tool.execute(run, bad)
+    assert result.ok is False and "missing param" in (result.error or "")
 
-    ghost = FileWriteResult(action_id="a1", path=os.path.join(str(tmp_path), "ghost.txt"), bytes_written=0)
-    with pytest.raises(VerificationFailedError, match="file not found"):
-        verify_file_write(ghost, expected_content="x")
+    # and a ToolResult claiming a path that was never written fails verification
+    ghost = ToolResult(
+        ok=True, action_id="a1", kind="file_write",
+        outputs={"path": os.path.join(str(tmp_path), "ghost.txt"), "bytes_written": 1},
+    )
+    outcome = FileVerifier().verify(run, ActionIntent(kind="file_write", params={"path": ghost.outputs["path"], "content": "x"}), ghost)
+    assert outcome.verified is False
 
 
 def test_prompt_injection_in_page_content_cannot_reach_the_effect_path(tmp_path):
@@ -169,6 +202,7 @@ def test_prompt_injection_in_page_content_cannot_reach_the_effect_path(tmp_path)
     run, bus, policy, output_path = _run(tmp_path)
     result = run_visit_summarize_save(
         run=run, bus=bus, browser=InjectedPageBrowser(), model=CompliantModel(), policy=policy,
+        tool=FileTool(), verifier=FileVerifier(),
         url="https://example.com", output_path=output_path,
     )
 

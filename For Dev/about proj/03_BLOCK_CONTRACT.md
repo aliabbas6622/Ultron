@@ -6,6 +6,29 @@ A block is not swappable merely because it has the same method names.
 
 A replacement is valid only when it satisfies the same **behavioral contract**.
 
+## Brick Independence (LEGO Rule)
+
+Every part is usable OUTSIDE ULTRON, and every part is replaceable from outside:
+
+- `contracts/` is **self-contained**: stdlib + contracts only (enforced by
+  tests/test_dependency_direction.py). It is the entire interchange spec —
+  any agent out there can implement or consume it with no ULTRON code.
+- `tools/` is **grab-and-go**: copy `contracts/ + tools/` into any host and
+  drive file_write intents with anything that has `check_alive()`. It never
+  imports core/.
+- `core/` is **pure composition**: the runtime owns no block implementation.
+  Browser, model, policy, tool executor, and verifier are all injected
+  parameters behind contract protocols — swap any brick at call time.
+- `contracts/call_context.py` `CallContext` is the whole host-side
+  requirement: cooperative cancellation via `check_alive()`. ULTRON's
+  RunContext satisfies it structurally; so does a 3-line class in any other
+  framework. Blocks never import a runtime context type.
+- `contracts/action.py` `ActionIntent` is the interchange format both ways:
+  external agents can emit intents our tools execute; our agents can emit
+  intents external executors run.
+- All Protocols are `@runtime_checkable` so a host can do bind-time
+  conformance checks (capability negotiation, below).
+
 Every block must define:
 
 ```text
@@ -49,6 +72,32 @@ optional:
 
 Routers must query declared capabilities rather than assume them.
 
+## Contracts Shipped (contracts/)
+
+```text
+call_context.py  CallContext        what a host must provide a brick: check_alive()
+action.py        ActionIntent       agent -> tool interchange format (id = idempotency key)
+errors.py        error taxonomy     normalized failure semantics for every brick
+health.py        HealthStatus       shared health reporting type
+model.py         ModelProvider v1   generate / health / capabilities
+browser.py       BrowserProvider v1 visit / health, PageProjection out
+memory.py        MemoryProvider v1  write / retrieve / health, MemoryRecord with provenance
+tool.py          ToolProvider v1    describe (lazy schemas) / execute / health, ToolResult
+verification.py  Verifier v1        verify(intent, result) against external evidence
+policy.py        PolicyEvaluator v1 evaluate(intent) -> ALLOW/DENY (ASK/CONSTRAIN/SANDBOX reserved)
+```
+
+ToolProvider v1 contract in brief:
+
+- `describe()` returns the compact catalog; `params_schema` stays `None`
+  until a host asks (lazy schema loading — a big registry never bloats context).
+- `execute()` receives only policy-approved intents; executing a kind the
+  tool never advertised raises `ContractViolationError`.
+- Failed executions return `ToolResult(ok=False, error=...)` — normalized,
+  never a raw vendor exception; the runtime maps that to `ToolExecutionError`.
+- `action_id` is the idempotency key: re-executing the same intent must leave
+  the same final state (duplicate side-effect retry safety).
+
 ## Conformance Suites
 
 Each contract must ship tests that every implementation must pass.
@@ -76,6 +125,16 @@ Examples:
 - usage reporting
 - normalized errors
 - capability advertisement
+
+### Tool
+- executes only advertised kinds (ContractViolationError otherwise)
+- failed executions normalize to ToolResult(ok=False)
+- idempotent retry on the same action_id
+- lazy schema loading (describe() never embeds full schemas by default)
+
+### Verifier
+- outcome is evidence-based, never trusts ToolResult.ok
+- catches tampered/lying tool output (content mismatch)
 
 A new block is not production-compatible until it passes its contract suite.
 

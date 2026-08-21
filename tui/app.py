@@ -33,6 +33,8 @@ from core.policy import PolicyEngine
 from core.run_context import RunContext
 from core.runtime import run_visit_summarize_save
 from tui.blocks import HttpBrowser, OllamaModel, StubSummarizerModel
+from tools.file_tool import FileTool
+from tools.file_verifier import FileVerifier
 
 
 def _select_model():
@@ -274,6 +276,8 @@ class UltronTUI(App[None]):
                 browser=HttpBrowser(),
                 model=_select_model(),
                 policy=policy,
+                tool=FileTool(),
+                verifier=FileVerifier(),
                 url=url,
                 output_path=output_path,
                 on_action_intent=self._request_approval,

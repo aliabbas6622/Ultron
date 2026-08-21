@@ -15,6 +15,12 @@ Status: Mojo contract facade and conformance suite complete; real Chromium/Light
 Rules for both: read contracts/ but never edit them. No vendor logic outside your adapter folder. If a contract seems wrong/missing, flag it to main agent instead of changing it. Commit only inside your own folder.
 
 STATUS (main agent, 2026-08-22, ZCode):
+- LEGO-BRICK refactor: contracts/ is self-contained (no core imports), new
+  contracts tool.py/verification.py/policy.py, new tools/ package (FileTool +
+  FileVerifier bricks, contracts-only deps). core/ is pure composition - the
+  runtime receives browser/model/policy/tool/verifier as injected bricks.
+  core/file_tool.py + core/verifier.py deleted. See Collab/ZCode/v3.txt.
+  Ownership: tools/ is main-agent owned alongside core/.
 - V0.1 brief fully closed (eval harness, telemetry, versioned instruction
   bundles, dependency-direction CI test, failure-mode tests - see
   08_ACCEPTANCE_AND_ROADMAP.md checked checklist + Collab/ZCode/v2.txt).

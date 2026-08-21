@@ -10,10 +10,16 @@ Execution/task state stays OUT of this block (06: separate from memory).
 
 from __future__ import annotations
 
+import uuid
 from dataclasses import dataclass, field
-from typing import Protocol
+from typing import Protocol, runtime_checkable
 
-from core.run_context import RunContext
+from contracts.call_context import CallContext
+from contracts.health import HealthStatus
+
+
+def new_memory_id() -> str:
+    return f"mem_{uuid.uuid4().hex}"
 
 CONTRACT_ID = "memory_provider"
 CONTRACT_VERSION = "1.0.0"
@@ -80,19 +86,20 @@ class HealthStatus:
     detail: str = ""
 
 
+@runtime_checkable
 class MemoryProvider(Protocol):
     """Required: write, retrieve, health. Adapters implement this against a
     persistent backend (SQLite for dev, PostgreSQL for default per 04_TECH_STACK)."""
 
     block_id: str
 
-    def write(self, run: RunContext, record: MemoryRecord) -> MemoryRecord:
+    def write(self, run: CallContext, record: MemoryRecord) -> MemoryRecord:
         """Persist a record; returns it with id + content_hash filled in. Writing a
         record whose supersedes/contradictions point at unknown ids is a
         ContractViolationError. Must honor run.check_alive()."""
         ...
 
-    def retrieve(self, run: RunContext, query: MemoryQuery) -> list[MemoryRecord]:
+    def retrieve(self, run: CallContext, query: MemoryQuery) -> list[MemoryRecord]:
         """Deterministically ordered, valid-at-`now`, superseded records excluded.
         Never drops required fields (full records or nothing)."""
         ...

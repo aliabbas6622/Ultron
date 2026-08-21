@@ -43,6 +43,12 @@ runtime -> ModelContract
 
 Concrete implementations live behind blocks.
 
+Every brick is bidirectionally portable: contracts/ is self-contained (stdlib
+only) and tools/ depends on contracts/ only, so any external agent can adopt
+ULTRON bricks — or provide bricks ULTRON composes — with `check_alive()` as
+the single host-side requirement. The runtime owns no block implementation;
+composition happens at the edges (TUI, tests, future hosts).
+
 ## Runtime Concepts
 
 Every run should carry:

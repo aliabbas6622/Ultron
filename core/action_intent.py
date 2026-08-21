@@ -1,15 +1,9 @@
-"""Model output never directly causes side effects. It proposes an ActionIntent instead."""
+"""ActionIntent now lives in contracts/action.py (it is the interchange format
+between any agent and any tool, so it must not belong to a runtime). Re-exported
+here for existing importers; new code should import from contracts.action."""
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
-from typing import Any
+from contracts.action import ActionIntent, new_action_id
 
-from core.ids import new_action_id
-
-
-@dataclass(frozen=True)
-class ActionIntent:
-    kind: str  # e.g. "file_write"
-    params: dict[str, Any] = field(default_factory=dict)
-    action_id: str = field(default_factory=new_action_id)
+__all__ = ["ActionIntent", "new_action_id"]

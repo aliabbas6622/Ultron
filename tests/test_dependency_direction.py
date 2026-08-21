@@ -1,10 +1,14 @@
 """Dependency-direction enforcement (05_AGENT_INSTRUCTIONS.md, 09_CODING_STANDARDS.md).
 
-Core may import contract definitions; core must never import vendor
-implementations (adapters/) or client code (tui/), and must stay stdlib-only
-so the runtime has no hidden third-party coupling. Contracts may import core
-(contracts model the run context they receive) but nothing else beyond stdlib.
-Enforced mechanically here — this file is the CI gate.
+The LEGO rule, enforced mechanically:
+
+- contracts/ is SELF-CONTAINED: stdlib + contracts only. No core, no runtime,
+  no third-party packages. This is what makes every brick portable to any host.
+- tools/ is GRAB-AND-GO: stdlib + contracts + tools only. Never core — you can
+  copy contracts/ + tools/ into any agent and it works.
+- core/ (the reference runtime) may import contracts + stdlib, never vendor
+  implementations (adapters/) or client code (tui/) and never tool bricks
+  (tools/) — the runtime receives blocks by injection.
 """
 
 from __future__ import annotations
@@ -14,8 +18,14 @@ import sys
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parent.parent
-ALLOWED_ROOTS = {"core", "contracts"}
-VENDOR_ROOTS = {"adapters", "tui"}
+
+# package -> what its modules may import beyond stdlib
+ALLOWED_IMPORTS: dict[str, set[str]] = {
+    "contracts": {"contracts"},
+    "tools": {"contracts", "tools"},
+    "core": {"core", "contracts"},
+}
+FORBIDDEN_EVERYWHERE = {"adapters", "tui"}
 
 
 def _imported_roots(path: Path) -> set[str]:
@@ -33,39 +43,51 @@ def _modules(root: str) -> list[Path]:
     return sorted((REPO / root).glob("*.py"))
 
 
-def test_core_imports_are_stdlib_or_contracts_only():
-    violations: list[str] = []
-    for path in _modules("core"):
-        for root in _imported_roots(path) - ALLOWED_ROOTS:
-            if root not in sys.stdlib_module_names:
-                violations.append(f"{path.name} imports {root!r}")
-    assert not violations, f"vendor/third-party imports in core/: {violations}"
-
-
-def test_contracts_imports_are_stdlib_or_core_only():
+def test_contracts_is_self_contained():
+    """contracts/ must build without any runtime — this is the brick interface spec."""
     violations: list[str] = []
     for path in _modules("contracts"):
-        for root in _imported_roots(path) - ALLOWED_ROOTS:
+        for root in _imported_roots(path) - ALLOWED_IMPORTS["contracts"]:
             if root not in sys.stdlib_module_names:
-                violations.append(f"{path.name} imports {root!r}")
-    assert not violations, f"unexpected imports in contracts/: {violations}"
+                violations.append(f"contracts/{path.name} imports {root!r}")
+    assert not violations, f"contracts/ is not self-contained: {violations}"
 
 
-def test_no_adapter_or_tui_import_anywhere_in_core_or_contracts():
+def test_tools_is_grab_and_go():
+    """tools/ bricks must run anywhere: contracts/ + stdlib only, never core."""
     violations: list[str] = []
-    for root_dir in ALLOWED_ROOTS:
+    for path in _modules("tools"):
+        for root in _imported_roots(path) - ALLOWED_IMPORTS["tools"]:
+            if root not in sys.stdlib_module_names:
+                violations.append(f"tools/{path.name} imports {root!r}")
+    assert not violations, f"tools/ is not grab-and-go: {violations}"
+
+
+def test_core_imports_are_stdlib_or_contracts_only():
+    """core is pure composition: no vendors, no clients, no brick implementations."""
+    violations: list[str] = []
+    for path in _modules("core"):
+        for root in _imported_roots(path) - ALLOWED_IMPORTS["core"]:
+            if root not in sys.stdlib_module_names:
+                violations.append(f"core/{path.name} imports {root!r}")
+    assert not violations, f"unexpected imports in core/: {violations}"
+
+
+def test_no_adapter_or_tui_import_anywhere_in_core_contracts_or_tools():
+    violations: list[str] = []
+    for root_dir in ("core", "contracts", "tools"):
         for path in _modules(root_dir):
-            bad = _imported_roots(path) & VENDOR_ROOTS
+            bad = _imported_roots(path) & FORBIDDEN_EVERYWHERE
             if bad:
                 violations.append(f"{root_dir}/{path.name} imports {sorted(bad)}")
     assert not violations, f"dependency-direction violation: {violations}"
 
 
-def test_future_import_present_in_all_core_and_contract_modules():
+def test_future_import_present_in_all_core_contract_and_tool_modules():
     # serialization/typing discipline: every module opts into modern annotations
     missing = [
         f"{root_dir}/{path.name}"
-        for root_dir in ALLOWED_ROOTS
+        for root_dir in ("core", "contracts", "tools")
         for path in _modules(root_dir)
         if "__future__" not in _imported_roots(path) and path.stat().st_size > 0
     ]

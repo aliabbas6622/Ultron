@@ -1,35 +1,29 @@
-"""Normalized error taxonomy for ULTRON core. Adapters must map vendor errors onto these."""
+"""Normalized errors now live in contracts/errors.py (failure semantics are part of
+the block contracts, so bricks raise them without importing a runtime). Re-exported
+here — importers keep working; new code should import from contracts.errors."""
 
 from __future__ import annotations
 
+from contracts.errors import (
+    BlockUnavailableError,
+    BudgetExceededError,
+    CancelledError,
+    ContractViolationError,
+    DeadlineExceededError,
+    PolicyDeniedError,
+    ToolExecutionError,
+    UltronError,
+    VerificationFailedError,
+)
 
-class UltronError(Exception):
-    """Base for all normalized runtime errors."""
-
-
-class CancelledError(UltronError):
-    """Run or operation was cancelled via its cancellation token."""
-
-
-class DeadlineExceededError(UltronError):
-    """Run or operation exceeded its deadline."""
-
-
-class BudgetExceededError(UltronError):
-    """A run/worker budget ceiling was hit (tokens, calls, money, writes)."""
-
-
-class PolicyDeniedError(UltronError):
-    """PolicyEngine denied an ActionIntent."""
-
-
-class BlockUnavailableError(UltronError):
-    """A block (model/browser/memory/etc.) failed health check or is unreachable."""
-
-
-class VerificationFailedError(UltronError):
-    """Post-action verification did not confirm the claimed side effect."""
-
-
-class ContractViolationError(UltronError):
-    """An adapter did not satisfy its declared block contract."""
+__all__ = [
+    "BlockUnavailableError",
+    "BudgetExceededError",
+    "CancelledError",
+    "ContractViolationError",
+    "DeadlineExceededError",
+    "PolicyDeniedError",
+    "ToolExecutionError",
+    "UltronError",
+    "VerificationFailedError",
+]

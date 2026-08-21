@@ -12,6 +12,7 @@ from contracts.browser import PageProjection
 from core.eval_harness import freeze, prompt_hash, run_scenario, summarize
 from core.eval_harness import Scenario
 from core.telemetry import RunMetrics, log_json
+from tools.file_verifier import FileVerifier
 
 PAGE = PageProjection(
     url="https://example.com",
@@ -33,7 +34,7 @@ def _scenario(**kw) -> Scenario:
 
 
 def test_deterministic_fixture_passes_and_records_metrics(tmp_path):
-    result = run_scenario(_scenario(), str(tmp_path))
+    result = run_scenario(_scenario(), str(tmp_path), FileVerifier())
     assert result.passed, result.failures
     m = result.metrics
     assert m.success and m.verification_ok is True
@@ -46,7 +47,7 @@ def test_deterministic_fixture_passes_and_records_metrics(tmp_path):
 
 
 def test_provider_unavailable_fixture_grades_as_failure_with_error_class(tmp_path):
-    result = run_scenario(_scenario(model_error="block_unavailable", name="model_down"), str(tmp_path))
+    result = run_scenario(_scenario(model_error="block_unavailable", name="model_down"), str(tmp_path), FileVerifier())
     assert result.passed, result.failures  # the *expectation* passed...
     assert result.metrics.success is False
     assert result.metrics.error_class == "BlockUnavailableError"
@@ -56,7 +57,7 @@ def test_provider_unavailable_fixture_grades_as_failure_with_error_class(tmp_pat
 def test_policy_deny_fixture_expects_no_write(tmp_path):
     # deny via a policy the scenario can't satisfy: write target outside the workdir
     scenario = _scenario(name="deny_outside_dir", output_filename="../escaped.txt", expected_policy="deny")
-    result = run_scenario(scenario, str(tmp_path))
+    result = run_scenario(scenario, str(tmp_path), FileVerifier())
     assert result.passed, result.failures
     assert not result.metrics.success
     import os
@@ -65,11 +66,11 @@ def test_policy_deny_fixture_expects_no_write(tmp_path):
 
 
 def test_frozen_prompt_hash_is_a_replay_contract(tmp_path):
-    frozen = freeze(_scenario(), str(tmp_path))
+    frozen = freeze(_scenario(), str(tmp_path), FileVerifier())
     assert frozen.expected_prompt_hash
 
     # replaying the frozen scenario still passes
-    again = run_scenario(frozen, str(tmp_path))
+    again = run_scenario(frozen, str(tmp_path), FileVerifier())
     assert again.passed, again.failures
 
     # tampering with the compiled context (different page text => different prompt)
@@ -78,15 +79,15 @@ def test_frozen_prompt_hash_is_a_replay_contract(tmp_path):
         page=PageProjection(url="https://example.com", title="Example Domain", text="totally different text"),
         expected_prompt_hash=frozen.expected_prompt_hash,
     )
-    result = run_scenario(tampered, str(tmp_path))
+    result = run_scenario(tampered, str(tmp_path), FileVerifier())
     assert not result.passed
     assert any("replay" in f for f in result.failures)
 
 
 def test_summarize_reports_totals_and_metrics(tmp_path):
     results = [
-        run_scenario(_scenario(), str(tmp_path)),
-        run_scenario(_scenario(model_error="deadline_exceeded", name="timeout"), str(tmp_path)),
+        run_scenario(_scenario(), str(tmp_path), FileVerifier()),
+        run_scenario(_scenario(model_error="deadline_exceeded", name="timeout"), str(tmp_path), FileVerifier()),
     ]
     summary = summarize(results)
     assert summary["total"] == 2 and summary["passed"] == 2
@@ -110,3 +111,15 @@ def test_run_metrics_defaults_and_log_json(tmp_path, caplog):
 def test_prompt_hash_is_stable_and_short():
     h1, h2 = prompt_hash("abc"), prompt_hash("abc")
     assert h1 == h2 and len(h1) == 16 and prompt_hash("abd") != h1
+
+
+def test_tool_failure_replay_grades_as_tool_execution_error(tmp_path):
+    # frozen TOOL response: ok=False replays through the runtime as a normalized
+    # ToolExecutionError with no side effect on disk
+    result = run_scenario(
+        _scenario(tool_failure="disk full", name="tool_down"), str(tmp_path), FileVerifier()
+    )
+    assert result.passed, result.failures
+    assert result.metrics.success is False
+    assert result.metrics.error_class == "ToolExecutionError"
+    assert not (tmp_path / "summary.txt").exists()

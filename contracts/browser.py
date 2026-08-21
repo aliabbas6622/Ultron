@@ -1,11 +1,13 @@
-"""Browser block contract. Adapters implement this; core depends only on this file."""
+"""Browser block contract. Adapters implement this; core depends only on this file.
+Self-contained: imports nothing outside contracts/ — any host can implement or drive it."""
 
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Protocol
+from typing import Protocol, runtime_checkable
 
-from core.run_context import RunContext
+from contracts.call_context import CallContext
+from contracts.health import HealthStatus
 
 CONTRACT_ID = "browser_provider"
 CONTRACT_VERSION = "1.0.0"
@@ -21,20 +23,16 @@ class PageProjection:
     truncated: bool = False
 
 
-@dataclass(frozen=True)
-class HealthStatus:
-    healthy: bool
-    detail: str = ""
-
-
+@runtime_checkable
 class BrowserProvider(Protocol):
     """Required: navigation, extraction, timeout behavior, cancellation, invalid URL handling, health."""
 
     block_id: str
 
-    def visit(self, run: RunContext, url: str, timeout_s: float) -> PageProjection:
-        """Navigate and return a projected page. Must raise core.errors on invalid URL,
-        timeout, or cancellation rather than returning a malformed/partial result silently."""
+    def visit(self, run: CallContext, url: str, timeout_s: float) -> PageProjection:
+        """Navigate and return a projected page. Must raise normalized errors (contracts.errors)
+        on invalid URL, timeout, or cancellation rather than returning a malformed/partial
+        result silently."""
         ...
 
     def health(self) -> HealthStatus:

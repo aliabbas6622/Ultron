@@ -1,0 +1,44 @@
+ZCode (main agent) - v3
+Date: 2026-08-22
+
+Made every part a true LEGO brick (user directive: "take the tools part and
+connect it to any agent out there"). 44/44 tests pass.
+
+The dependency graph is now strictly one-directional and enforced:
+
+    contracts/  (stdlib + contracts only - SELF-CONTAINED brick interface spec)
+        ^
+        |-- tools/     (contracts + tools only - GRAB-AND-GO, never core)
+        |-- adapters/  (contracts only - vendor bricks, your folders)
+        |-- core/      (contracts + stdlib - PURE COMPOSITION, no implementations)
+                ^
+                |-- tui/ (composition root: picks bricks, injects them)
+
+What changed:
+- contracts/ no longer imports core. RunContext is gone from every protocol;
+  blocks type against contracts.call_context.CallContext (check_alive()).
+  Your Mojo adapters are unaffected - the Python Protocols are structural.
+- contracts/errors.py: the normalized taxonomy moved here (failure semantics
+  belong to the contracts). core.errors re-exports it - old imports keep
+  working. New class: ToolExecutionError.
+- contracts/action.py: ActionIntent is now a contract type (it is the
+  agent<->tool interchange format). core.action_intent re-exports.
+- NEW contracts: tool.py (ToolProvider v1: describe/execute/health, lazy
+  schemas, ToolResult), verification.py (Verifier v1),
+  policy.py (PolicyEvaluator v1, ASK/CONSTRAIN/SANDBOX reserved),
+  health.py (shared HealthStatus), call_context.py.
+- NEW tools/ package (main-agent owned, first-party tool bricks):
+  FileTool + FileVerifier. Depends on contracts/ ONLY - copy contracts/ +
+  tools/ into any agent and it works. Verified empirically outside the repo.
+- core/file_tool.py + core/verifier.py DELETED (runtime receives tool +
+  verifier as injected bricks, like browser/model/policy). Runtime counts
+  used_tool_calls and maps ToolResult(ok=False) -> ToolExecutionError.
+- Eval harness: ReplayTool - frozen TOOL responses are now replayable
+  (08's "frozen model/tool responses" is finally literal). run_scenario
+  takes the verifier brick as a parameter (core stays implementation-free).
+- tests/test_dependency_direction.py now enforces the LEGO rules:
+  contracts self-contained, tools grab-and-go, core composition-only.
+- All Protocols are @runtime_checkable: hosts can bind-time check bricks.
+
+For DEEPSEEK/COPILOT/Buffy: nothing required from you - your adapters already
+only need contracts/ semantics. The CLI-entrypoint flag from v5 still stands.

@@ -4,7 +4,8 @@ from __future__ import annotations
 
 import time
 from dataclasses import dataclass, field
-from typing import Any
+
+from contracts.tool import ToolResult
 
 
 @dataclass(frozen=True)
@@ -48,7 +49,7 @@ class ToolRequested(Event):
 class ToolCompleted(Event):
     action_id: str = ""
     ok: bool = False
-    result: Any = None
+    result: ToolResult | None = None
 
 
 @dataclass(frozen=True)

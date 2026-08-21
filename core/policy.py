@@ -1,22 +1,21 @@
-"""PolicyEngine: the only path from ActionIntent to a permitted side effect. LLM cannot self-authorize."""
+"""PolicyEngine: the only path from ActionIntent to a permitted side effect. LLM cannot self-authorize.
+Implements contracts.policy.PolicyEvaluator (structural) so an external agent can adopt this engine,
+or ULTRON can adopt an external one — the native-evaluator guarantee (07) is what must hold."""
 
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass
-from enum import Enum, auto
 
-from core.action_intent import ActionIntent
+from contracts.action import ActionIntent
+from contracts.policy import Decision, PolicyDecision
 
-
-class Decision(Enum):
-    ALLOW = auto()
-    DENY = auto()
+__all__ = ["Decision", "PolicyDecision", "PolicyResult", "PolicyEngine"]
 
 
 @dataclass(frozen=True)
-class PolicyResult:
-    decision: Decision
-    reason: str = ""
+class PolicyResult(PolicyDecision):
+    """Legacy alias; policy decisions are contract types now."""
 
 
 class PolicyEngine:
@@ -31,8 +30,6 @@ class PolicyEngine:
             return PolicyResult(Decision.DENY, f"unknown action kind: {intent.kind}")
 
         path = intent.params.get("path", "")
-        import os
-
         abs_target = os.path.abspath(path)
         abs_allowed = os.path.abspath(self._allowed_write_dir)
         if os.path.commonpath([abs_target, abs_allowed]) != abs_allowed:

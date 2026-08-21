@@ -25,16 +25,20 @@ from dataclasses import dataclass, field, replace
 
 from contracts.browser import HealthStatus as BrowserHealth
 from contracts.browser import PageProjection
-from contracts.model import HealthStatus as ModelHealth
-from contracts.model import ModelCapabilities, ModelResult
-from core.bus import EventBus
-from core.errors import (
+from contracts.errors import (
     BlockUnavailableError,
     BudgetExceededError,
     CancelledError,
+    ContractViolationError,
     DeadlineExceededError,
     PolicyDeniedError,
+    ToolExecutionError,
+    VerificationFailedError,
 )
+from contracts.model import HealthStatus as ModelHealth
+from contracts.model import ModelCapabilities, ModelResult
+from contracts.tool import ToolResult
+from core.bus import EventBus
 from core.policy import PolicyEngine
 from core.run_context import RunContext
 from core.runtime import run_visit_summarize_save
@@ -46,6 +50,9 @@ ERROR_CLASSES: dict[str, type[Exception]] = {
     "cancelled": CancelledError,
     "deadline_exceeded": DeadlineExceededError,
     "budget_exceeded": BudgetExceededError,
+    "contract_violation": ContractViolationError,
+    "tool_execution": ToolExecutionError,
+    "verification_failed": VerificationFailedError,
 }
 
 
@@ -97,6 +104,42 @@ class ReplayModel:
         return ModelHealth(healthy=self._scenario.model_error is None)
 
 
+class ReplayTool:
+    """Frozen ToolProvider double: records intents, replays the scenario's tool
+    failure (ok=False) or error instead of touching the filesystem when the
+    scenario pins one."""
+
+    block_id = "replay_tool"
+
+    def __init__(self, scenario: "Scenario") -> None:
+        self._scenario = scenario
+        self.intents: list = []
+
+    def describe(self):
+        from contracts.tool import ToolDescriptor
+
+        return [ToolDescriptor(kind="file_write", name="file_write", risk_class="side_effect")]
+
+    def execute(self, run, intent) -> ToolResult:
+        run.check_alive()
+        self.intents.append(intent)
+        if self._scenario.tool_error:
+            raise ERROR_CLASSES[self._scenario.tool_error](f"replay: {self._scenario.tool_error}")
+        if self._scenario.tool_failure:
+            return ToolResult(ok=False, action_id=intent.action_id, kind=intent.kind,
+                              outputs={}, error=f"replay: {self._scenario.tool_failure}")
+        path = intent.params["path"]
+        with open(path, "w", encoding="utf-8") as f:
+            f.write(intent.params["content"])
+        return ToolResult(ok=True, action_id=intent.action_id, kind=intent.kind,
+                          outputs={"path": path, "bytes_written": len(intent.params["content"].encode("utf-8"))})
+
+    def health(self):
+        from contracts.health import HealthStatus
+
+        return HealthStatus(healthy=True, detail="replay tool")
+
+
 @dataclass(frozen=True)
 class Scenario:
     """Deterministic fixture for the V0.1 slice."""
@@ -115,11 +158,19 @@ class Scenario:
     expected_error_class: str | None = None  # e.g. "PolicyDeniedError", "BlockUnavailableError"
     browser_error: str | None = None  # ERROR_CLASSES key the browser replays
     model_error: str | None = None  # ERROR_CLASSES key the model replays
+    tool_error: str | None = None  # ERROR_CLASSES key the tool replays (raises)
+    tool_failure: str | None = None  # tool replays ok=False with this error detail
     tags: tuple[str, ...] = ()
 
     @property
     def expect_success(self) -> bool:
-        return self.expected_error_class is None and self.model_error is None and self.browser_error is None
+        return (
+            self.expected_error_class is None
+            and self.model_error is None
+            and self.browser_error is None
+            and self.tool_error is None
+            and self.tool_failure is None
+        )
 
     @property
     def effective_error_class(self) -> str | None:
@@ -130,6 +181,10 @@ class Scenario:
             return ERROR_CLASSES[self.model_error].__name__
         if self.browser_error is not None:
             return ERROR_CLASSES[self.browser_error].__name__
+        if self.tool_error is not None:
+            return ERROR_CLASSES[self.tool_error].__name__
+        if self.tool_failure is not None:
+            return ToolExecutionError.__name__
         return None
 
 
@@ -149,10 +204,10 @@ def prompt_hash(prompt: str) -> str:
     return hashlib.sha256(prompt.encode("utf-8")).hexdigest()[:16]
 
 
-def freeze(scenario: Scenario, workdir: str) -> Scenario:
+def freeze(scenario: Scenario, workdir: str, verifier) -> Scenario:
     """Run once against the frozen blocks and pin the observed prompt hash into
     the fixture. The pinned hash is the replay contract."""
-    result = run_scenario(scenario, workdir)
+    result = run_scenario(scenario, workdir, verifier)
     if not result.passed:
         raise ValueError(f"cannot freeze failing scenario {scenario.name!r}: {result.failures}")
     if result.observed_prompt_hash is None:
@@ -160,8 +215,9 @@ def freeze(scenario: Scenario, workdir: str) -> Scenario:
     return replace(scenario, expected_prompt_hash=result.observed_prompt_hash)
 
 
-def run_scenario(scenario: Scenario, workdir: str) -> EvalResult:
-    """Execute a scenario through the real runtime path and grade it."""
+def run_scenario(scenario: Scenario, workdir: str, verifier) -> EvalResult:
+    """Execute a scenario through the real runtime path and grade it. The caller
+    supplies the verifier brick (composition stays outside core)."""
     output_path = os.path.join(workdir, scenario.output_filename)
     run = RunContext()
     bus = EventBus()
@@ -169,6 +225,7 @@ def run_scenario(scenario: Scenario, workdir: str) -> EvalResult:
     policy = PolicyEngine(allowed_write_dir=workdir)
     browser = ReplayBrowser(scenario)
     model = ReplayModel(scenario)
+    tool = ReplayTool(scenario)
 
     failures: list[str] = []
     error: Exception | None = None
@@ -176,16 +233,26 @@ def run_scenario(scenario: Scenario, workdir: str) -> EvalResult:
     try:
         run_visit_summarize_save(
             run=run, bus=bus, browser=browser, model=model, policy=policy,
+            tool=tool, verifier=verifier,
             url=scenario.url, output_path=output_path,
         )
     except Exception as exc:  # normalized runtime errors are graded, not crashed on
         error = exc
 
-    # --- route: exactly one model call, one visit, against the selected blocks
+    # --- route: exactly one model call, one visit, one tool intent, against the selected blocks
     if len(model.prompts) != 1:
         failures.append(f"route: expected 1 model call, got {len(model.prompts)}")
     if browser.visited != [(scenario.url, 30.0)]:
         failures.append(f"route: browser visits {browser.visited}, expected [({scenario.url!r}, 30.0)]")
+    # the tool stage is only reached when browser+model succeeded and policy allowed
+    tool_stage_expected = (
+        scenario.browser_error is None
+        and scenario.model_error is None
+        and scenario.expected_policy == "allow"
+    )
+    expected_intents = 1 if tool_stage_expected else 0
+    if len(tool.intents) != expected_intents:
+        failures.append(f"route: expected {expected_intents} tool intent(s), got {len(tool.intents)}")
 
     observed = prompt_hash(model.prompts[0]) if model.prompts else None
 

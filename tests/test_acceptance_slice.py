@@ -22,6 +22,8 @@ from core.events import ModelCompleted, ModelStarted, ToolCompleted
 from core.policy import PolicyEngine
 from core.run_context import RunContext
 from core.runtime import run_visit_summarize_save
+from tools.file_tool import FileTool
+from tools.file_verifier import FileVerifier
 
 
 class FakeBrowser:
@@ -80,6 +82,8 @@ def test_vertical_slice_end_to_end(tmp_path):
         browser=FakeBrowser(),
         model=FakeModel(),
         policy=policy,
+        tool=FileTool(),
+        verifier=FileVerifier(),
         url="https://example.com",
         output_path=output_path,
     )
@@ -105,6 +109,7 @@ def test_policy_denies_write_outside_allowed_dir(tmp_path):
     with pytest.raises(PolicyDeniedError):
         run_visit_summarize_save(
             run=run, bus=bus, browser=FakeBrowser(), model=FakeModel(), policy=policy,
+            tool=FileTool(), verifier=FileVerifier(),
             url="https://example.com", output_path=outside_path,
         )
     assert not os.path.isfile(outside_path)
@@ -117,6 +122,7 @@ def test_cancellation_stops_the_run_before_any_write(tmp_path):
     with pytest.raises(CancelledError):
         run_visit_summarize_save(
             run=run, bus=bus, browser=FakeBrowser(), model=CancellingModel(), policy=policy,
+            tool=FileTool(), verifier=FileVerifier(),
             url="https://example.com", output_path=output_path,
         )
     assert not os.path.isfile(output_path)
@@ -135,6 +141,7 @@ def test_browser_failure_does_not_crash_runtime(tmp_path):
     with pytest.raises(Exception):
         run_visit_summarize_save(
             run=run, bus=bus, browser=FailingBrowser(), model=FakeModel(), policy=policy,
+            tool=FileTool(), verifier=FileVerifier(),
             url="https://example.com", output_path=output_path,
         )
     # runtime raised a normalized error rather than crashing with an unhandled state

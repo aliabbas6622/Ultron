@@ -1,11 +1,13 @@
-"""ModelProvider v1 contract. Adapters implement this; core/routing depends only on this file."""
+"""ModelProvider v1 contract. Adapters implement this; core/routing depends only on this file.
+Self-contained: imports nothing outside contracts/ — any host can implement or drive it."""
 
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Protocol
+from typing import Protocol, runtime_checkable
 
-from core.run_context import RunContext
+from contracts.call_context import CallContext
+from contracts.health import HealthStatus
 
 CONTRACT_ID = "model_provider"
 CONTRACT_VERSION = "1.0.0"
@@ -31,12 +33,7 @@ class ModelResult:
     cached_tokens: int = 0  # prompt-cache hit tokens, reported for eval metrics
 
 
-@dataclass(frozen=True)
-class HealthStatus:
-    healthy: bool
-    detail: str = ""
-
-
+@runtime_checkable
 class ModelProvider(Protocol):
     """Required: text_generation, cancellation, health, usage_reporting.
     Optional capabilities are declared via .capabilities and must be checked before use.
@@ -45,9 +42,9 @@ class ModelProvider(Protocol):
     block_id: str
     capabilities: ModelCapabilities
 
-    def generate(self, run: RunContext, prompt: str) -> ModelResult:
+    def generate(self, run: CallContext, prompt: str) -> ModelResult:
         """Blocking text generation. Must honor run.check_alive() at minimum before/after the call
-        and raise core.errors.CancelledError / DeadlineExceededError promptly on cancellation."""
+        and raise CancelledError / DeadlineExceededError promptly on cancellation."""
         ...
 
     def health(self) -> HealthStatus:

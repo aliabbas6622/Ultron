@@ -1,9 +1,12 @@
-"""V0.1 vertical slice runtime.
+"""V0.1 vertical slice runtime — pure composition.
 
 user input -> browser -> page projection -> context compiler -> model
--> ActionIntent(write file) -> policy -> filesystem tool -> verification -> response
+-> ActionIntent(write file) -> policy -> tool executor -> verifier -> response
 
-Depends only on contracts (contracts.model, contracts.browser), never on adapter internals.
+Every capability is an injected brick behind a contracts/ protocol: browser,
+model, policy, tool, verifier. The runtime owns no block implementations
+(LEGO rule) — swap any brick at call time, including from a different vendor
+or host ecosystem.
 """
 
 from __future__ import annotations
@@ -11,12 +14,15 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Callable
 
+from contracts.action import ActionIntent
 from contracts.browser import BrowserProvider
+from contracts.errors import PolicyDeniedError, ToolExecutionError, VerificationFailedError
 from contracts.model import ModelProvider
-from core.action_intent import ActionIntent
+from contracts.policy import PolicyEvaluator
+from contracts.tool import ToolProvider
+from contracts.verification import Verifier
 from core.bus import EventBus
 from core.context_compiler import compile_context
-from core.errors import PolicyDeniedError, VerificationFailedError
 from core.events import (
     ModelCompleted,
     ModelStarted,
@@ -25,11 +31,8 @@ from core.events import (
     ToolRequested,
     VerificationFailed,
 )
-from core.file_tool import execute_file_write
 from core.instructions import PAGE_FRAME_TEMPLATE, TASK_VISIT_SUMMARIZE
-from core.policy import Decision, PolicyEngine
 from core.run_context import RunContext
-from core.verifier import verify_file_write
 
 
 @dataclass(frozen=True)
@@ -43,7 +46,9 @@ def run_visit_summarize_save(
     bus: EventBus,
     browser: BrowserProvider,
     model: ModelProvider,
-    policy: PolicyEngine,
+    policy: PolicyEvaluator,
+    tool: ToolProvider,
+    verifier: Verifier,
     url: str,
     output_path: str,
     timeout_s: float = 30.0,
@@ -83,7 +88,7 @@ def run_visit_summarize_save(
     intent = ActionIntent(kind="file_write", params={"path": output_path, "content": summary})
 
     decision = policy.evaluate(intent)
-    if decision.decision != Decision.ALLOW:
+    if decision.decision.name != "ALLOW":
         bus.publish(
             PolicyDenied(run_id=run.run_id, trace_id=run.trace_id, action_id=intent.action_id, reason=decision.reason)
         )
@@ -98,24 +103,32 @@ def run_visit_summarize_save(
     run.check_alive()
     bus.publish(
         ToolRequested(
-            run_id=run.run_id, trace_id=run.trace_id, action_id=intent.action_id, tool_name="file_write",
+            run_id=run.run_id, trace_id=run.trace_id, action_id=intent.action_id, tool_name=intent.kind,
             args=intent.params,
         )
     )
-    write_result = execute_file_write(intent)
-    run.budget.used_external_writes += 1
+    tool_result = tool.execute(run, intent)
+    run.budget.used_tool_calls += 1
+    if intent.kind == "file_write":
+        run.budget.used_external_writes += 1
     bus.publish(
-        ToolCompleted(run_id=run.run_id, trace_id=run.trace_id, action_id=intent.action_id, ok=True, result=write_result)
+        ToolCompleted(
+            run_id=run.run_id, trace_id=run.trace_id, action_id=intent.action_id,
+            ok=tool_result.ok, result=tool_result,
+        )
     )
+    if not tool_result.ok:
+        raise ToolExecutionError(tool_result.error or f"{tool.block_id} failed without detail")
 
-    try:
-        verify_file_write(write_result, expected_content=summary)
-    except VerificationFailedError as exc:
+    outcome = verifier.verify(run, intent, tool_result)
+    if not outcome.verified:
         run.metadata["verification_ok"] = False
         bus.publish(
-            VerificationFailed(run_id=run.run_id, trace_id=run.trace_id, action_id=intent.action_id, reason=str(exc))
+            VerificationFailed(
+                run_id=run.run_id, trace_id=run.trace_id, action_id=intent.action_id, reason=outcome.detail
+            )
         )
-        raise
+        raise VerificationFailedError(outcome.detail)
     run.metadata["verification_ok"] = True
 
-    return SliceResult(summary=summary, output_path=write_result.path)
+    return SliceResult(summary=summary, output_path=tool_result.outputs.get("path", output_path))

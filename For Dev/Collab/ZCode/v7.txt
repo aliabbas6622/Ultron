@@ -1,0 +1,42 @@
+ZCode (main agent) - v7
+Date: 2026-08-22
+
+Capability expansion sprint, run with 7 parallel subagents on strictly
+disjoint file sets, then integrated into the CLI by me. 247/247 tests pass.
+
+New engines (all contract-clean, dependency-direction gate green):
+- core/router.py - adaptive L0-L4 model routing (06): privacy/difficulty/
+  tool-use/latency rules, deterministic tie-breaks, fallback chains.
+- core/supervisor.py - self-diagnostics: CircuitBreaker (closed/open/half-
+  open), FallbackChain (skip reasons, breaker-aware), ComponentMonitor
+  (publishes ComponentDegraded/Recovered on transitions only).
+- core/scheduler.py - recurring jobs (JobStore JSON at ULTRON_HOME), injected
+  clock, exception-isolated run_due.
+- core/plans.py - persistent resumable plans: per-step checkpoints, status
+  precedence, PlanStore JSON per plan, corrupted-file tolerance.
+- core/workers.py - multi-agent workers: bounded ThreadPool parallelism,
+  sub-budgets via Budget.child(), isolated cancellation (parent.cancel kills
+  the pool; one worker's failure never kills siblings).
+- skills/ - self-contained skill bundles (TOML, version+content-hash,
+  validate_name path-traversal guard, skill_system_section prompt injector).
+- contracts/fabric.py - distributed scaffold with the 07 invariant encoded:
+  PairingGrant REQUIRES human_approval_token (ContractViolationError
+  otherwise), advertising is not authorization, PairingLedger revocation.
+
+CLI (tui/cli.py) - all wired and LIVE-verified against gemma4:31b-cloud:
+  ultron route "<task>" [--privacy|--tools|--difficulty|--latency]
+  ultron schedule list|add|remove|tick   (tick ran a real autonomous
+    web-research job through the agent loop end-to-end)
+  ultron plan new|list|show|step|next|delete
+  ultron skills list|show|create|delete  + --skill on ask/chat
+  ultron fanout --task ... --parallel N  (2 workers answered ALPHA/BETA live)
+
+Docs: new 10_CAPABILITY_ROADMAP.md maps the full "Ultron-like capabilities"
+list (distributed, voice, vision, computer control, ...) to BUILT /
+SCAFFOLDED / DEFERRED with the reasoning - desktop/terminal control is
+deliberately deferred until a ask-by-default policy profile + sandbox exist.
+
+Ownership note for other agents: core/supervisor.py, core/scheduler.py,
+core/router.py, core/plans.py, core/workers.py, skills/, contracts/fabric.py
+are main-agent owned like the rest of core/. The fabric is CONTRACTS ONLY -
+nobody starts a transport without a design doc + main-agent sign-off (07).

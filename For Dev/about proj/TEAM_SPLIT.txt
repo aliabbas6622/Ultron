@@ -15,6 +15,16 @@ Status: Mojo contract facade and conformance suite complete; real Chromium/Light
 Rules for both: read contracts/ but never edit them. No vendor logic outside your adapter folder. If a contract seems wrong/missing, flag it to main agent instead of changing it. Commit only inside your own folder.
 
 STATUS (main agent, 2026-08-22, ZCode):
+- CAPABILITY SPRINT (7 parallel subagents, 247/247 tests): routing
+  (core/router.py L0-L4), self-diagnostics (core/supervisor.py breakers +
+  fallback chains), autonomy (core/scheduler.py recurring jobs), long-term
+  plans (core/plans.py resumable checkpoints), multi-agent workers
+  (core/workers.py sub-budgets), skills (skills/ package + --skill flag),
+  distributed scaffold (contracts/fabric.py - pairing REQUIRES human
+  approval per 07). CLI: ultron route|schedule|plan|skills|fanout, all
+  live-verified. Status of every long-term capability: see
+  10_CAPABILITY_ROADMAP.md. Fabric is contracts-only — no transport work
+  without a design doc.
 - AGENTIC CHAT landed: core/agent.py loop (propose -> policy -> optional
   approval -> tool -> verify -> observe, bounded rounds). New tool brick
   tools/web_fetch.py (read-only, projected text). Native function calling via

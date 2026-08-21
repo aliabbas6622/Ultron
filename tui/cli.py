@@ -108,6 +108,18 @@ def _cmd_run(args: argparse.Namespace) -> int:
     return 0
 
 
+def _skill_system(skill_flag: str | None, base_system: str | None) -> str | None:
+    """Fold --skill names into the agent system prompt."""
+    from skills.store import FileSkillStore, skill_system_section
+
+    if not skill_flag:
+        return base_system
+    store = FileSkillStore()
+    loaded = [store.load(name.strip()) for name in skill_flag.split(",") if name.strip()]
+    section = skill_system_section(loaded)
+    return "\n\n".join(part for part in (base_system, section) if part)
+
+
 def _cmd_ask(args: argparse.Namespace) -> int:
     from core.agent import agent_turn
 
@@ -118,7 +130,8 @@ def _cmd_ask(args: argparse.Namespace) -> int:
         outcome = agent_turn(
             run, model, [], args.text,
             policy=_agent_policy(args.no_tools), tools=_agent_tools(args.no_tools),
-            verifiers=_agent_verifiers(args.no_tools), memory=memory, system=args.system,
+            verifiers=_agent_verifiers(args.no_tools), memory=memory,
+            system=_skill_system(getattr(args, "skill", None), args.system),
         )
     except UltronError as exc:
         print(f"FAILED [{type(exc).__name__}]: {exc}", file=sys.stderr)
@@ -148,6 +161,7 @@ def _cmd_chat(args: argparse.Namespace) -> int:
     tools = _agent_tools(args.no_tools)
     policy = _agent_policy(args.no_tools)
     verifiers = _agent_verifiers(args.no_tools)
+    system = _skill_system(getattr(args, "skill", None), None)
     history: list[ChatMessage] = []
     run = RunContext()
     who = f"{model.block_id}"
@@ -188,7 +202,7 @@ def _cmd_chat(args: argparse.Namespace) -> int:
             continue
         try:
             outcome = agent_turn(run, model, history, text, policy=policy, tools=tools,
-                                 verifiers=verifiers, memory=memory)
+                                 verifiers=verifiers, memory=memory, system=system)
         except UltronError as exc:
             print(f"[{type(exc).__name__}] {exc}")
             continue
@@ -312,6 +326,205 @@ def _cmd_version(args: argparse.Namespace) -> int:
     return 0
 
 
+def _cmd_route(args: argparse.Namespace) -> int:
+    from core.router import CandidateSpec, ModelRouter, RouteRequest
+
+    registry = ProviderRegistry.load()
+    tier = {"ollama": 1, "ollama-cloud": 2, "openai-compatible": 2}
+    candidates = [
+        CandidateSpec(name="stub", kind="stub", cost_tier=0, local=True, healthy=True, model="extractive")
+    ]
+    for name, spec in registry.specs.items():
+        healthy = spec.name == registry.default_provider  # only ping the default (cheap); others assumed up
+        candidates.append(CandidateSpec(name=name, kind=spec.kind, cost_tier=tier.get(spec.kind, 2),
+                                        local=spec.kind == "ollama", healthy=healthy, model=spec.model))
+    decision = ModelRouter(candidates).route(RouteRequest(
+        task_text=args.text, privacy_required=args.privacy, tool_use_needed=args.tools,
+        difficulty=args.difficulty, latency_target_s=args.latency,
+    ))
+    print(f"level     {decision.level}")
+    print(f"provider  {decision.provider_name or '(none)'}")
+    print(f"reason    {decision.reason}")
+    if decision.fallback_chain:
+        print(f"fallback  {' -> '.join(decision.fallback_chain)}")
+    return 0
+
+
+def _cmd_schedule(args: argparse.Namespace) -> int:
+    import time as _time
+
+    from core.scheduler import JobStore, Scheduler, schedules_path
+
+    store = JobStore(schedules_path())
+    sched = Scheduler(store)
+    cmd = args.schedule_cmd
+
+    if cmd == "list":
+        jobs = sorted(store.load().values(), key=lambda j: j.next_run)
+        if not jobs:
+            print(f"no jobs (config: {store.path})")
+            return 0
+        print(f"{'NAME':<20} {'EVERY':>8} {'NEXT RUN':>12} {'ENABLED':>8}  LAST RESULT")
+        for job in jobs:
+            eta = f"in {max(0.0, job.next_run - _time.time()):.0f}s"
+            print(f"{job.name:<20} {job.every_s:>7.0f}s {eta:>12} {str(job.enabled):>8}  {job.last_result[:60]}")
+        return 0
+
+    if cmd == "add":
+        job = sched.add_job(args.name, args.prompt, args.every)
+        print(f"scheduled {job.name}: every {job.every_s:.0f}s")
+        return 0
+
+    if cmd == "remove":
+        jobs = store.load()
+        if args.name not in jobs:
+            print(f"error: unknown job {args.name!r}", file=sys.stderr)
+            return 2
+        store.remove(args.name)
+        print(f"removed {args.name}")
+        return 0
+
+    if cmd == "tick":
+        from core.agent import agent_turn
+
+        def runner(job):
+            run = RunContext()
+            memory = _open_memory()
+            try:
+                outcome = agent_turn(run, _resolve_model(None), [], job.prompt,
+                                     policy=_agent_policy(False), tools=_agent_tools(False),
+                                     verifiers=_agent_verifiers(False), memory=memory)
+                return outcome.answer.text
+            finally:
+                if memory is not None:
+                    memory.close()
+
+        ran = sched.run_due(runner)
+        if not ran:
+            print("nothing due")
+        for job, error in ran:
+            status = "ok" if error is None else f"FAILED ({error})"
+            print(f"[{job.name}] {status}: {job.last_result[:120]}")
+        return 0 if all(err is None for _, err in ran) else 1
+
+    return 2
+
+
+def _cmd_plan(args: argparse.Namespace) -> int:
+    from core.plans import Plan, PlanStep, PlanStore, plans_dir
+
+    store = PlanStore(plans_dir())
+    cmd = args.plan_cmd
+
+    if cmd == "new":
+        import time as _time
+
+        if not args.step:
+            print("error: provide at least one --step", file=sys.stderr)
+            return 2
+        plan = Plan(name=args.name, goal=args.goal,
+                    steps=[PlanStep(description=s) for s in args.step], created_at=_time.time())
+        store.save(plan)
+        print(f"plan {plan.name}: {len(plan.steps)} steps toward: {plan.goal}")
+        return 0
+
+    if cmd == "list":
+        plans = store.list()
+        if not plans:
+            print("no plans")
+            return 0
+        for p in plans:
+            done, total = p.progress()
+            print(f"{p.name:<20} {p.status:<12} {done}/{total} steps  {p.goal[:60]}")
+        return 0
+
+    if cmd == "show":
+        p = store.load(args.name)
+        print(f"plan {p.name} [{p.status}] — {p.goal}")
+        for i, step in enumerate(p.steps):
+            mark = {"done": "+", "in_progress": ">", "failed": "x", "pending": " "}.get(step.status, "?")
+            print(f"  [{mark}] {i}: {step.description}  ({step.status})")
+        return 0
+
+    if cmd == "step":
+        import time as _time
+
+        p = store.set_step_status(args.name, args.index, args.status, now=_time.time())
+        step = p.steps[args.index]
+        nxt = p.next_step()
+        print(f"step {args.index} -> {args.status}; next: {nxt.description if nxt else '(plan complete)'}")
+        return 0
+
+    if cmd == "next":
+        p = store.load(args.name)
+        nxt = p.next_step()
+        print(nxt.description if nxt else "(plan complete)")
+        return 0
+
+    if cmd == "delete":
+        store.delete(args.name)
+        print(f"deleted {args.name}")
+        return 0
+
+    return 2
+
+
+def _cmd_skills(args: argparse.Namespace) -> int:
+    from skills.store import FileSkillStore, Skill
+
+    store = FileSkillStore()
+    cmd = args.skills_cmd
+
+    if cmd == "list":
+        skills = store.list()
+        if not skills:
+            print(f"no skills (create one: ultron skills create <name> --description ... --instructions ...)")
+            return 0
+        for s in skills:
+            tools = ",".join(s.tools) or "-"
+            print(f"{s.name:<20} v{s.version:<6} [{tools}] {s.description[:70]}")
+        print("\nuse with: ultron ask/chat --skill <name>")
+        return 0
+
+    if cmd == "show":
+        s = store.load(args.name)
+        print(f"{s.record_id()}\n{s.description}\n\n{s.instructions}")
+        return 0
+
+    if cmd == "create":
+        s = Skill(name=args.name, description=args.description, instructions=args.instructions,
+                  tools=tuple(t.strip() for t in (args.tools or "").split(",") if t.strip()),
+                  version=args.version)
+        store.save(s)
+        print(f"saved {s.record_id()} ({store.dir / (s.name + '.toml') if hasattr(store, 'dir') else ''})")
+        return 0
+
+    if cmd == "delete":
+        store.delete(args.name)
+        print(f"deleted {args.name}")
+        return 0
+
+    return 2
+
+
+def _cmd_fanout(args: argparse.Namespace) -> int:
+    from core.workers import WorkerPool, WorkerTask, pool_totals
+
+    run = RunContext()
+    model = _resolve_model(args.model)
+    tasks = [WorkerTask(role=f"worker-{i + 1}", prompt=p) for i, p in enumerate(args.task)]
+    print(f"spawning {len(tasks)} workers (parallelism {args.parallel}) on {model.block_id}", file=sys.stderr)
+    results = WorkerPool(parent=run, max_parallel=args.parallel).run_all(model, tasks)
+    for r in results:
+        if r.error_class:
+            print(f"[{r.worker_id}/{r.role}] FAILED {r.error_class}")
+        else:
+            print(f"[{r.worker_id}/{r.role}]\n{r.text}\n")
+    tin, tout = pool_totals(results)
+    print(f"workers: {len(results)} | tokens in/out: {tin}/{tout}", file=sys.stderr)
+    return 0 if all(r.error_class is None for r in results) else 1
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="ultron",
@@ -330,15 +543,77 @@ def build_parser() -> argparse.ArgumentParser:
     p_ask.add_argument("text", help="the question / prompt")
     p_ask.add_argument("--model", default=None, help="model name override")
     p_ask.add_argument("--system", default=None, help="optional system instruction")
+    p_ask.add_argument("--skill", default=None, help="skill name(s), comma-separated (ultron skills list)")
     p_ask.add_argument("--no-memory", action="store_true", help="skip memory write/recall for this question")
     p_ask.add_argument("--no-tools", action="store_true", help="plain chat, no tool loop")
     p_ask.set_defaults(func=_cmd_ask)
 
     p_chat = sub.add_parser("chat", help="agentic multi-turn REPL: tools + persistent memory")
     p_chat.add_argument("--model", default=None, help="model name override")
+    p_chat.add_argument("--skill", default=None, help="skill name(s), comma-separated, injected every turn")
     p_chat.add_argument("--no-memory", action="store_true", help="disable persistent memory")
     p_chat.add_argument("--no-tools", action="store_true", help="plain chat, no tool loop")
     p_chat.set_defaults(func=_cmd_chat)
+
+    p_route = sub.add_parser("route", help="preview the adaptive model-routing decision for a task")
+    p_route.add_argument("text", help="the task text")
+    p_route.add_argument("--privacy", action="store_true", help="task requires local-only models")
+    p_route.add_argument("--tools", action="store_true", help="task needs tool calling")
+    p_route.add_argument("--difficulty", default="normal", choices=["trivial", "normal", "hard"])
+    p_route.add_argument("--latency", type=float, default=None, help="latency target seconds")
+    p_route.set_defaults(func=_cmd_route)
+
+    p_sched = sub.add_parser("schedule", help="recurring background jobs (autonomy)")
+    sched_sub = p_sched.add_subparsers(dest="schedule_cmd", required=True)
+    sched_sub.add_parser("list", help="list jobs and next runs")
+    p_add = sched_sub.add_parser("add", help="add a recurring job")
+    p_add.add_argument("name", help="job slug")
+    p_add.add_argument("--every", type=float, required=True, help="seconds between runs")
+    p_add.add_argument("--prompt", required=True, help="what the agent does each run")
+    p_rm = sched_sub.add_parser("remove", help="remove a job")
+    p_rm.add_argument("name")
+    sched_sub.add_parser("tick", help="run all due jobs now (call from a timer/cron)")
+    p_sched.set_defaults(func=_cmd_schedule)
+
+    p_plan = sub.add_parser("plan", help="long-term persistent, resumable plans")
+    plan_sub = p_plan.add_subparsers(dest="plan_cmd", required=True)
+    p_new = plan_sub.add_parser("new", help="create a plan")
+    p_new.add_argument("name", help="plan slug")
+    p_new.add_argument("--goal", required=True)
+    p_new.add_argument("--step", action="append", required=True, help="step description (repeatable)")
+    plan_sub.add_parser("list", help="list plans with progress")
+    p_show = plan_sub.add_parser("show", help="show a plan's steps")
+    p_show.add_argument("name")
+    p_step = plan_sub.add_parser("step", help="update a step's status")
+    p_step.add_argument("name")
+    p_step.add_argument("index", type=int)
+    p_step.add_argument("status", choices=["pending", "in_progress", "done", "failed"])
+    p_next = plan_sub.add_parser("next", help="print the next resumable step")
+    p_next.add_argument("name")
+    p_pdel = plan_sub.add_parser("delete", help="delete a plan")
+    p_pdel.add_argument("name")
+    p_plan.set_defaults(func=_cmd_plan)
+
+    p_skills = sub.add_parser("skills", help="reusable skill bundles")
+    skills_sub = p_skills.add_subparsers(dest="skills_cmd", required=True)
+    skills_sub.add_parser("list", help="list skills")
+    p_show_s = skills_sub.add_parser("show", help="show one skill")
+    p_show_s.add_argument("name")
+    p_mk = skills_sub.add_parser("create", help="create/update a skill")
+    p_mk.add_argument("name")
+    p_mk.add_argument("--description", required=True)
+    p_mk.add_argument("--instructions", required=True)
+    p_mk.add_argument("--tools", default=None, help="comma-separated tool kinds it uses")
+    p_mk.add_argument("--version", default="1.0.0")
+    p_sdel = skills_sub.add_parser("delete", help="delete a skill")
+    p_sdel.add_argument("name")
+    p_skills.set_defaults(func=_cmd_skills)
+
+    p_fan = sub.add_parser("fanout", help="multi-agent workers: run prompts in parallel specialist sub-agents")
+    p_fan.add_argument("--task", action="append", required=True, help="worker prompt (repeatable)")
+    p_fan.add_argument("--model", default=None, help="model name override")
+    p_fan.add_argument("--parallel", type=int, default=2, help="max concurrent workers")
+    p_fan.set_defaults(func=_cmd_fanout)
 
     p_prov = sub.add_parser("providers", help="manage model providers")
     p_sub = p_prov.add_subparsers(dest="providers_cmd", required=True)

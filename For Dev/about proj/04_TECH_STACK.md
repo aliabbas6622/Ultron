@@ -47,6 +47,12 @@ Development:
 
 Use migrations from day one.
 
+STATUS 2026-08-22: SQLite dev backend (core/memory_sqlite.py) + conformance
+suite landed earlier. PostgreSQL backend landed at adapters/memory/postgres.py
+(optional dep group `postgres`: `uv sync --group postgres`; tests run when
+ULTRON_PG_DSN is set) — same MemoryProvider v1 semantics, same migration
+versioning. pgvector semantic retrieval remains open until retrieval needs it.
+
 ## External Tool Standard
 
 Use MCP at external boundaries where useful.
@@ -77,6 +83,12 @@ Large immutable data:
 - content-addressed local filesystem initially
 - hash-based IDs
 - optional S3-compatible backend later
+
+STATUS 2026-08-22: implemented — core/artifacts.py ArtifactStore (sha256 ids,
+sharded layout, immutable writes, metadata sidecars, default
+~/.ultron/artifacts). The context compiler offloads over-threshold page text
+into artifact references, and the agent loop offloads large tool outputs the
+same way (references over raw bulk, 01 principle 4).
 
 ## Config
 

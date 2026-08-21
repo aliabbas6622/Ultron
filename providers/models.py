@@ -11,6 +11,7 @@ from __future__ import annotations
 import json
 import urllib.error
 import urllib.request
+from collections.abc import Iterator
 from dataclasses import dataclass
 
 from contracts.errors import BlockUnavailableError
@@ -61,7 +62,7 @@ class OllamaLocalModel:
 
     def __post_init__(self) -> None:
         if self.capabilities is None:
-            self.capabilities = ModelCapabilities(prompt_cache=True)
+            self.capabilities = ModelCapabilities(prompt_cache=True, streaming=True)
 
     def generate(self, run, prompt: str) -> ModelResult:
         run.check_alive()
@@ -78,6 +79,40 @@ class OllamaLocalModel:
             output_tokens=int(data.get("eval_count", 0)),
             finish_reason=str(data.get("done_reason", "stop")),
         )
+
+    def generate_stream(self, run, prompt: str) -> Iterator[str]:
+        """Optional streaming capability (StreamingModel): newline-delimited JSON
+        objects from ollama's native /api/generate with stream=true. Yields
+        non-empty "response" deltas until done:true; network/HTTP/parse errors
+        normalize to BlockUnavailableError."""
+        run.check_alive()
+        url = f"{self.base_url}/api/generate"
+        req = urllib.request.Request(
+            url,
+            data=json.dumps({"model": self.model, "prompt": prompt, "stream": True}).encode("utf-8"),
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        try:
+            with urllib.request.urlopen(req, timeout=_REQUEST_TIMEOUT_S) as resp:
+                for raw_line in resp:  # http response objects iterate line by line
+                    line = raw_line.decode("utf-8", "replace").strip("\r\n")
+                    if not line.strip():
+                        continue
+                    chunk = json.loads(line)
+                    delta = str(chunk.get("response", ""))
+                    if delta:
+                        yield delta
+                    if chunk.get("done"):
+                        return
+        except urllib.error.HTTPError as exc:
+            raise BlockUnavailableError(
+                f"ollama generate_stream failed ({self.model} @ {self.base_url}, http {exc.code})"
+            ) from exc
+        except (urllib.error.URLError, TimeoutError, OSError) as exc:
+            raise BlockUnavailableError(f"stream request to {url} failed: {exc}") from exc
+        except ValueError as exc:  # json parse of a stream line
+            raise BlockUnavailableError(f"unparseable stream line from {url}: {exc}") from exc
 
     def health(self) -> HealthStatus:
         try:
@@ -110,7 +145,7 @@ class OpenAICompatModel:
 
     def __post_init__(self) -> None:
         if self.capabilities is None:
-            self.capabilities = ModelCapabilities(prompt_cache=True, tool_calling=True)
+            self.capabilities = ModelCapabilities(prompt_cache=True, tool_calling=True, streaming=True)
 
     def _endpoints(self) -> tuple[str, str]:
         base = self.base_url.rstrip("/")
@@ -180,6 +215,50 @@ class OpenAICompatModel:
             if isinstance(usage.get("prompt_tokens_details"), dict) else 0,
             tool_calls=tool_calls,
         )
+
+    def generate_stream(self, run, prompt: str) -> Iterator[str]:
+        """Optional streaming capability (StreamingModel): server-sent events from
+        the chat endpoint with stream=true. Yields non-empty choices[0].delta.content
+        fragments until the terminal "data: [DONE]"; HTTP/network/parse errors
+        normalize to BlockUnavailableError."""
+        run.check_alive()
+        chat_url, _ = self._endpoints()
+        req = urllib.request.Request(
+            chat_url,
+            data=json.dumps({
+                "model": self.model,
+                "messages": [{"role": "user", "content": prompt}],
+                "stream": True,
+            }).encode("utf-8"),
+            headers={"Content-Type": "application/json", **_bearer(self.api_key)},
+            method="POST",
+        )
+        try:
+            with urllib.request.urlopen(req, timeout=_REQUEST_TIMEOUT_S) as resp:
+                for raw_line in resp:  # http response objects iterate line by line
+                    line = raw_line.decode("utf-8", "replace").strip("\r\n")
+                    if not line.startswith("data:"):
+                        continue
+                    payload = line[len("data:"):].strip()
+                    if payload == "[DONE]":
+                        return
+                    if not payload:
+                        continue
+                    chunk = json.loads(payload)
+                    choices = chunk.get("choices") or [] if isinstance(chunk, dict) else []
+                    if not choices:
+                        continue
+                    delta = (choices[0].get("delta", {}) or {}).get("content")
+                    if delta:
+                        yield str(delta)
+        except urllib.error.HTTPError as exc:
+            raise BlockUnavailableError(
+                f"{self.block_id} generate_stream failed ({self.model}, http {exc.code})"
+            ) from exc
+        except (urllib.error.URLError, TimeoutError, OSError) as exc:
+            raise BlockUnavailableError(f"stream request to {chat_url} failed: {exc}") from exc
+        except ValueError as exc:  # json parse of an SSE data payload
+            raise BlockUnavailableError(f"unparseable stream event from {chat_url}: {exc}") from exc
 
     def health(self) -> HealthStatus:
         _, models_url = self._endpoints()

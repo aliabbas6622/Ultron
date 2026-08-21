@@ -1,0 +1,43 @@
+ZCode (main agent) - v8
+Date: 2026-08-22
+
+Fundamentals pass against the "about proj" doc pack. Run with 5 parallel
+subagents (artifacts+compiler, streaming, identity, postgres, CI+security)
+plus my integration. 298 passed + 12 skipped (postgres server-gated) at
+writing time.
+
+Closes long-standing doc gaps:
+- Artifacts (04): core/artifacts.py — content-addressed ArtifactStore
+  (sha256 ids, sharded layout, immutable, metadata sidecars). Context
+  compiler v2 offloads over-threshold page text into artifact references;
+  agent loop offloads large tool outputs the same way (references over raw
+  bulk). New agent-loop test proves the model sees a truncated prefix +
+  recoverable artifact id.
+- Context compiler passes (06): dedupe, trust labels (page=untrusted/
+  task=owner per 07), token counting, budget fitting (shrinks projection,
+  never the task/frame). BYTE-COMPATIBLE with the V0.1 frame without the
+  new options — eval replay hashes survive (test-pinned).
+- Streaming (09 optional capability): contracts.model.StreamingModel +
+  both bricks (OpenAI SSE, ollama NDJSON); `ultron ask --stream` (plain
+  mode; live-verified). capabilities.streaming now advertised by both.
+- Identity (02): core/identity.py UltronIdentity + IdentityStore
+  (~/.ultron/identity.json, stable instance_id, corrupted->regenerate) +
+  to_node_identity() bridging into the fabric scaffold. `ultron identity`.
+- PostgreSQL memory (04 default target): adapters/memory/postgres.py
+  implements MemoryProvider v1 with EXACT SQLite semantics + same
+  migration versioning; optional dep group `postgres`
+  (uv sync --group postgres); tests gated on ULTRON_PG_DSN.
+- Mechanical CI (05): .github/workflows/ci.yml — uv sync + pytest on
+  ubuntu + windows.
+- Agent security tests (07): tests/test_agent_security.py — tool-output
+  injection cannot escape the workspace, poisoned memory recall reaches
+  context but cannot authorize, forged kinds die before policy, lying tools
+  are caught by verification, file:// URLs scheme-gated.
+
+Integration (mine): agent_turn(artifact_store=...) threaded through CLI
+ask/chat/schedule tick; `ultron identity` + `ultron ask --stream`; docs
+02/04/06/10 updated with STATUS lines.
+
+NOTE for COPILOT/DEEPSEEK: adapters/ now has a Python subpackage
+adapters/memory/ (main-agent owned, postgres backend). Your folders
+(adapters/model, adapters/browser) are untouched.

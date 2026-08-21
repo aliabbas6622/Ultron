@@ -17,6 +17,11 @@ dev = [
     "pytest>=8.3",
     "pytest-asyncio>=0.24",
 ]
+# 04_TECH_STACK: PostgreSQL is the default memory persistence target. Opt in
+# with `uv sync --group postgres` (not part of the default dev environment).
+postgres = [
+    "psycopg[binary]>=3.1",
+]
 
 [build-system]
 requires = ["hatchling"]

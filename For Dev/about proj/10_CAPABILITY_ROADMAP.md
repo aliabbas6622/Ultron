@@ -68,3 +68,18 @@ the 07 containment invariant (no self-install, ever).
 
 No autonomous host acquisition. The model never authorizes privileged
 actions. A discovered node is not an admitted node.
+
+## Update 2026-08-22 (fundamentals pass)
+
+- **Streaming** — BUILT: optional StreamingModel contract + both provider
+  bricks (SSE/NDJSON), `ultron ask --stream` (live-verified).
+- **Content-addressed artifacts** — BUILT: core/artifacts.py; compiler +
+  agent loop offload bulk text to references (01 principle 4).
+- **Identity** — BUILT: core/identity.py persisted instance identity, fabric
+  bridge (`ultron identity`).
+- **PostgreSQL memory** — BUILT: adapters/memory/postgres.py (optional group
+  `postgres`, ULTRON_PG_DSN-gated tests), migration parity with SQLite.
+- **Mechanical CI** — BUILT: .github/workflows/ci.yml (uv + pytest, Linux +
+  Windows).
+- **Security tests** — BUILT: tool-output injection, poisoned memory recall,
+  forged kinds, lying tools, scheme gating (tests/test_agent_security.py).

@@ -218,6 +218,37 @@ def test_web_fetch_denied_by_policy_for_bad_scheme(tmp_path):
     assert decision.decision == Decision.DENY
 
 
+def test_large_tool_outputs_offload_to_artifact_references(tmp_path):
+    """01 principle: references over raw bulk — a big web_fetch result enters the
+    model's observation as a truncated prefix + content-addressed artifact ref."""
+    from core.artifacts import ArtifactStore
+
+    store = ArtifactStore(tmp_path / "artifacts")
+
+    class BigFetchTool(WebFetchTool):
+        def execute(self, run, intent):
+            from contracts.tool import ToolResult
+
+            return ToolResult(ok=True, action_id=intent.action_id, kind=intent.kind,
+                              outputs={"url": intent.params["url"], "title": "big",
+                                       "text": "x" * 5000})
+
+    model = ScriptedModel(
+        'ACTION: {"kind": "web_fetch", "params": {"url": "https://example.com"}}',
+        "Summarized from the artifact reference.",
+    )
+    run = RunContext()
+    result = agent_turn(run, model, [], "fetch it",
+                        policy=PolicyEngine(allowed_write_dir=str(tmp_path)),
+                        tools=[BigFetchTool()], verifiers=[FileVerifier()],
+                        artifact_store=store)
+    assert result.rounds >= 2
+    second_prompt = model.prompts[1]
+    assert "artifact sha256-" in second_prompt and "5000 chars total" in second_prompt
+    ref_id = second_prompt.split("artifact ")[1].split("]")[0].strip()
+    assert store.load(ref_id).decode("utf-8") == "x" * 5000  # full text recoverable
+
+
 # --- helpers -----------------------------------------------------------------
 
 def test_parse_action_lines():

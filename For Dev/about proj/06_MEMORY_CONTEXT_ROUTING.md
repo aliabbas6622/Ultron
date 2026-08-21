@@ -74,6 +74,16 @@ validate
 
 Large outputs remain external as artifact references.
 
+STATUS 2026-08-22 (context compiler v2, core/context_compiler.py): dedupe,
+project, preserve trust (trust_labels: page=untrusted / task=owner), count
+tokens, fit budget (max_tokens shrinks the projection, never the task/frame),
+and artifact references (over-threshold page text offloads to the
+content-addressed store behind a deterministic reference line) are implemented.
+Still open: tool-schema pruning (needs multi-tool contexts), cache-region
+arrangement, representation selection (TOON stays deferred per 04). The V0.1
+frame stays byte-identical without the new options — test-pinned, so eval
+replay hashes survive.
+
 ## Runtime Budgets
 
 Each run should support ceilings such as:

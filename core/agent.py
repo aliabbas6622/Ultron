@@ -83,9 +83,23 @@ def parse_action_lines(text: str) -> tuple[list[dict], str | None]:
     return proposals, None
 
 
-def _observation(intent: ActionIntent, result: ToolResult, verified: str) -> str:
-    outputs = {k: (v if not isinstance(v, str) or len(v) <= MAX_OBSERVATION_CHARS else v[:MAX_OBSERVATION_CHARS] + "...")
-               for k, v in result.outputs.items()}
+def _observation(intent: ActionIntent, result: ToolResult, verified: str, artifact_store=None) -> str:
+    outputs = {}
+    for k, v in result.outputs.items():
+        if isinstance(v, str) and len(v) > MAX_OBSERVATION_CHARS:
+            # reference over bulk (01): keep a prefix inline, offload the full text
+            prefix = v[:MAX_OBSERVATION_CHARS]
+            ref_note = ""
+            if artifact_store is not None:
+                try:
+                    ref = artifact_store.store(v, content_type="text/plain",
+                                               metadata={"kind": intent.kind, "url": result.outputs.get("url", "")})
+                    ref_note = f" [full text: artifact {ref.artifact_id}]"
+                except Exception:  # noqa: BLE001 — offload is best-effort; never kill the loop
+                    ref_note = ""
+            outputs[k] = prefix + f"...({len(v)} chars total{', truncated' if not ref_note else ''})" + ref_note
+        else:
+            outputs[k] = v
     state = "ok" if result.ok else f"FAILED: {result.error}"
     return f"RESULT {intent.kind} [{state}] {json.dumps(outputs, ensure_ascii=False, default=str)} {verified}".strip()
 
@@ -102,6 +116,7 @@ def agent_turn(
     memory=None,
     system: str | None = None,
     on_action: Callable[[ActionIntent], bool] | None = None,
+    artifact_store=None,  # core.artifacts.ArtifactStore — large tool outputs offloaded to references (01: references over raw bulk)
 ) -> AgentTurnResult:
     """One agentic exchange. Side effects only ever happen through
     policy(->approval)->tool->verify; everything the model says is a proposal."""
@@ -198,7 +213,7 @@ def agent_turn(
                         f"SYSTEM: verification FAILED for {kind}: {outcome.detail}"
                     )
                     continue
-            new_observations.append(_observation(intent, tool_result, verified_note))
+            new_observations.append(_observation(intent, tool_result, verified_note, artifact_store))
 
         observations = new_observations or ["SYSTEM: no actionable result — answer in plain text"]
 

@@ -123,6 +123,9 @@ def _skill_system(skill_flag: str | None, base_system: str | None) -> str | None
 def _cmd_ask(args: argparse.Namespace) -> int:
     from core.agent import agent_turn
 
+    if getattr(args, "stream", False):
+        return _cmd_ask_stream(args)
+
     run = RunContext()
     model = _resolve_model(args.model)
     memory = _open_memory() if not args.no_memory else None
@@ -132,6 +135,7 @@ def _cmd_ask(args: argparse.Namespace) -> int:
             policy=_agent_policy(args.no_tools), tools=_agent_tools(args.no_tools),
             verifiers=_agent_verifiers(args.no_tools), memory=memory,
             system=_skill_system(getattr(args, "skill", None), args.system),
+            artifact_store=_open_artifact_store(),
         )
     except UltronError as exc:
         print(f"FAILED [{type(exc).__name__}]: {exc}", file=sys.stderr)
@@ -145,10 +149,75 @@ def _cmd_ask(args: argparse.Namespace) -> int:
     return 0
 
 
+def _open_artifact_store():
+    try:
+        from core.artifacts import ArtifactStore
+
+        return ArtifactStore()
+    except Exception:  # noqa: BLE001 — offloading is best-effort
+        return None
+
+
 def _agent_verifiers(no_tools: bool):
     from tools.file_verifier import FileVerifier
 
     return [] if no_tools else [FileVerifier()]
+
+
+def _cmd_ask_stream(args: argparse.Namespace) -> int:
+    """--stream: plain streamed generation (no tool loop) over any
+    StreamingModel-capable brick; deltas print live."""
+    from contracts.model import StreamingModel
+
+    model = _resolve_model(args.model)
+    if not (isinstance(model, StreamingModel) and getattr(model.capabilities, "streaming", False)):
+        print(f"{model.block_id} cannot stream; rerun without --stream", file=sys.stderr)
+        return 2
+    run = RunContext()
+    memory = _open_memory() if not args.no_memory else None
+    system = _skill_system(getattr(args, "skill", None), args.system)
+    from core.chat import compile_chat_prompt
+
+    prompt = compile_chat_prompt([], args.text, memory_lines=[], system=system)
+    try:
+        chunks: list[str] = []
+        for delta in model.generate_stream(run, prompt):
+            chunks.append(delta)
+            print(delta, end="", flush=True)
+        print()
+        run.budget.used_model_calls += 1
+        if memory is not None:
+            from contracts.memory import MemoryRecord
+            import time as _time
+
+            answer = "".join(chunks).strip()
+            memory.write(run, MemoryRecord(
+                kind="episodic", subject="chat", predicate="exchange",
+                value=f"U: {args.text[:280]} A: {answer[:280]}",
+                source=f"chat:{model.block_id}", observed_at=_time.time(), importance=0.4,
+            ))
+    except UltronError as exc:
+        print(f"\nFAILED [{type(exc).__name__}]: {exc}", file=sys.stderr)
+        return 1
+    finally:
+        if memory is not None:
+            memory.close()
+    return 0
+
+
+def _cmd_identity(args: argparse.Namespace) -> int:
+    from core.identity import IdentityStore
+
+    identity = IdentityStore().load_or_create()
+    print(f"instance  {identity.instance_id}")
+    print(f"name      {identity.name}")
+    print(f"owner     {identity.owner_id}")
+    print(f"device    {identity.device_identity}")
+    print(f"trusted   {identity.trusted_environment}")
+    print(f"caps      {', '.join(identity.capabilities) or '-'}")
+    node = identity.to_node_identity()
+    print(f"fabric    {node.instance_id} trust={node.trust}")
+    return 0
 
 
 def _cmd_chat(args: argparse.Namespace) -> int:
@@ -202,7 +271,8 @@ def _cmd_chat(args: argparse.Namespace) -> int:
             continue
         try:
             outcome = agent_turn(run, model, history, text, policy=policy, tools=tools,
-                                 verifiers=verifiers, memory=memory, system=system)
+                                 verifiers=verifiers, memory=memory, system=system,
+                                 artifact_store=_open_artifact_store())
         except UltronError as exc:
             print(f"[{type(exc).__name__}] {exc}")
             continue
@@ -393,7 +463,8 @@ def _cmd_schedule(args: argparse.Namespace) -> int:
             try:
                 outcome = agent_turn(run, _resolve_model(None), [], job.prompt,
                                      policy=_agent_policy(False), tools=_agent_tools(False),
-                                     verifiers=_agent_verifiers(False), memory=memory)
+                                     verifiers=_agent_verifiers(False), memory=memory,
+                                     artifact_store=_open_artifact_store())
                 return outcome.answer.text
             finally:
                 if memory is not None:
@@ -546,7 +617,11 @@ def build_parser() -> argparse.ArgumentParser:
     p_ask.add_argument("--skill", default=None, help="skill name(s), comma-separated (ultron skills list)")
     p_ask.add_argument("--no-memory", action="store_true", help="skip memory write/recall for this question")
     p_ask.add_argument("--no-tools", action="store_true", help="plain chat, no tool loop")
+    p_ask.add_argument("--stream", action="store_true", help="stream the answer live (plain mode, no tool loop)")
     p_ask.set_defaults(func=_cmd_ask)
+
+    p_identity = sub.add_parser("identity", help="show this node's persistent identity")
+    p_identity.set_defaults(func=_cmd_identity)
 
     p_chat = sub.add_parser("chat", help="agentic multi-turn REPL: tools + persistent memory")
     p_chat.add_argument("--model", default=None, help="model name override")

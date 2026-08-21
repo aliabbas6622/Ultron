@@ -11,6 +11,8 @@ from contracts.call_context import CallContext
 from contracts.health import HealthStatus
 
 if TYPE_CHECKING:
+    from typing import Iterator
+
     from contracts.tool import ToolDescriptor
 
 CONTRACT_ID = "model_provider"
@@ -75,4 +77,16 @@ class ToolCallingModel(Protocol):
     def generate_with_tools(self, run: CallContext, prompt: str, tools: "list[ToolDescriptor]") -> ModelResult:
         """Returns ModelResult whose tool_calls carry proposals; text may be empty
         when the model chose to call tools only."""
+        ...
+
+
+@runtime_checkable
+class StreamingModel(Protocol):
+    """Optional capability on top of ModelProvider v1: streamed text generation.
+    Hosts check isinstance(model, StreamingModel) (and capabilities.streaming)
+    before using it; non-streaming generate() remains the minimum contract."""
+
+    def generate_stream(self, run: CallContext, prompt: str) -> Iterator[str]:
+        """Yield text deltas. Must call run.check_alive() before starting and
+        raise CancelledError/DeadlineExceededError/BlockUnavailableError promptly."""
         ...

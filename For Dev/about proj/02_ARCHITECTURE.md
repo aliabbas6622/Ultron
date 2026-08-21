@@ -114,3 +114,8 @@ capabilities
 ```
 
 Future distributed identity may add cryptographic node identity, but V0.x does not need multi-device fabric implementation.
+
+STATUS 2026-08-22: implemented — core/identity.py UltronIdentity + IdentityStore
+(persistent at ~/.ultron/identity.json, load-or-create, stable instance_id) and
+to_node_identity() bridging into the contracts/fabric.py scaffold. `ultron identity`
+shows it.

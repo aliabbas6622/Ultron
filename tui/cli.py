@@ -136,6 +136,7 @@ def _cmd_ask(args: argparse.Namespace) -> int:
             verifiers=_agent_verifiers(args.no_tools), memory=memory,
             system=_skill_system(getattr(args, "skill", None), args.system),
             artifact_store=_open_artifact_store(),
+            host_facts=_host_facts(not args.no_memory),
         )
     except UltronError as exc:
         print(f"FAILED [{type(exc).__name__}]: {exc}", file=sys.stderr)
@@ -156,6 +157,36 @@ def _open_artifact_store():
         return ArtifactStore()
     except Exception:  # noqa: BLE001 — offloading is best-effort
         return None
+
+
+def _host_facts(memory_on: bool):
+    """Environment facts for the agent system prompt: who/where/when this node
+    is, the workspace, and any in-progress plan steps (Manus-style grounding)."""
+    import time as _time
+
+    from core.agent import HostFacts
+
+    identity_name, device = "ULTRON", ""
+    try:
+        from core.identity import IdentityStore
+
+        identity = IdentityStore().load_or_create()
+        identity_name, device = identity.name, identity.device_identity
+    except Exception:  # noqa: BLE001
+        pass
+    plans: tuple[tuple[str, str], ...] = ()
+    try:
+        from core.plans import PlanStore, plans_dir
+
+        active = [p for p in PlanStore(plans_dir()).list() if p.status == "in_progress"]
+        plans = tuple((p.name, p.next_step().description) for p in active if p.next_step())
+    except Exception:  # noqa: BLE001
+        pass
+    return HostFacts(
+        identity_name=identity_name, device=device,
+        now=_time.strftime("%Y-%m-%d %H:%M:%S"),
+        workspace=WORKSPACE_DIR, memory_enabled=memory_on, active_plans=plans,
+    )
 
 
 def _agent_verifiers(no_tools: bool):
@@ -231,6 +262,7 @@ def _cmd_chat(args: argparse.Namespace) -> int:
     policy = _agent_policy(args.no_tools)
     verifiers = _agent_verifiers(args.no_tools)
     system = _skill_system(getattr(args, "skill", None), None)
+    facts = _host_facts(memory is not None)
     history: list[ChatMessage] = []
     run = RunContext()
     who = f"{model.block_id}"
@@ -272,7 +304,8 @@ def _cmd_chat(args: argparse.Namespace) -> int:
         try:
             outcome = agent_turn(run, model, history, text, policy=policy, tools=tools,
                                  verifiers=verifiers, memory=memory, system=system,
-                                 artifact_store=_open_artifact_store())
+                                 artifact_store=_open_artifact_store(),
+                                 host_facts=facts)
         except UltronError as exc:
             print(f"[{type(exc).__name__}] {exc}")
             continue
@@ -464,7 +497,8 @@ def _cmd_schedule(args: argparse.Namespace) -> int:
                 outcome = agent_turn(run, _resolve_model(None), [], job.prompt,
                                      policy=_agent_policy(False), tools=_agent_tools(False),
                                      verifiers=_agent_verifiers(False), memory=memory,
-                                     artifact_store=_open_artifact_store())
+                                     artifact_store=_open_artifact_store(),
+                                     host_facts=_host_facts(memory is not None))
                 return outcome.answer.text
             finally:
                 if memory is not None:

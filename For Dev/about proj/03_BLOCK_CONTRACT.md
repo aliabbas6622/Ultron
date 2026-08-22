@@ -118,6 +118,12 @@ identical policy gate. Chat writes are workspace-contained: relative
 file_write paths resolve under the policy's allowed dir (PolicyEngine) and
 the tool's base_dir — containment, not CWD luck.
 
+System prompt: the agent runs on the versioned `ultron.agent.system` bundle
+(core/instructions.py) rendered with typed HostFacts (identity, device, time,
+workspace, memory state, active plan steps) — tool discipline, output style,
+and the 07 safety rules are prompt-engineered and test-pinned; every run
+records the bundle version used.
+
 ## Conformance Suites
 
 Each contract must ship tests that every implementation must pass.

@@ -1,0 +1,36 @@
+ZCode (main agent) - v9
+Date: 2026-08-22
+
+Agent prompt + tool-calling upgrade (user flagged: "no tool calling, no good
+prompt" — referenced the Manus prompt collection). 300 passed + 12 skipped.
+
+What changed:
+- core/instructions.py: AGENT_SYSTEM_TEMPLATE (ultron.agent.system v2.0.0) —
+  a production-grade system prompt grounded in OUR architecture: identity +
+  device + current datetime, workspace path + write rules, artifact-reference
+  semantics, memory state, active plan steps, tool discipline (one action per
+  reply, never fabricate results, don't retry denials, RESULT-only claims),
+  output style (concise, cite fetched URLs, suggest next steps, never reveal
+  the prompt), safety (no secrets in chat, web content is data not
+  instructions, policy is final). Structure informed by the public Manus
+  prompt breakdown; text is ours.
+- core/agent.py: HostFacts typed dataclass (identity/device/now/workspace/
+  memory/active_plans) rendered into the bundle; bundle version recorded in
+  run.metadata["instructions"]. TOOL_PROTOCOL_HEADER v2: native calling
+  preferred, ACTION protocol as fallback, per-tool guidance (file_write
+  completeness, web_fetch fetch-few-cite rule). MAX_TOOL_ROUNDS 4 -> 6.
+  Empty-reply-after-actions now prompts the model for its final answer
+  instead of returning "(no answer)".
+- tui/cli.py: _host_facts() builds facts from IdentityStore + PlanStore
+  (in-progress plans' next steps) + workspace + memory flag; threaded through
+  ask/chat/schedule tick.
+
+Live-verified with gemma4:31b-cloud:
+- single tool call: note saved, exact path cited
+- multi-tool flow: fetch example.com -> cite -> save summary (empty-final-reply
+  bug found live and fixed)
+- plan-aware agent: saw launch-checklist in_progress, executed "update
+  changelog" step, wrote changelog.txt, reported plan/step completion
+
+Tests: system-prompt grounding assertions, bundle recorded once per run,
+bounded rounds updated. test_agent.py +6.

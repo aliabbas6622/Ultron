@@ -27,18 +27,63 @@ from contracts.policy import Decision
 from contracts.tool import ToolProvider, ToolResult
 from contracts.verification import Verifier
 from core.chat import ChatMessage, compile_chat_prompt
+from core.instructions import AGENT_SYSTEM_TEMPLATE
 from core.run_context import RunContext
 
-MAX_TOOL_ROUNDS = 4  # 09: bounded retries / tool rounds, never unbounded
+MAX_TOOL_ROUNDS = 6  # 09: bounded retries / tool rounds, never unbounded
 MAX_OBSERVATION_CHARS = 2000
+MAX_PLAN_LINES = 5
 
-TOOL_PROTOCOL_HEADER = """You can use tools to act. Available tools:
+TOOL_PROTOCOL_HEADER = """# Tools
+Available tools (params marked ? are optional):
 {catalog}
-To use a tool, reply with EXACTLY one line per action and nothing else:
-ACTION: {{"kind": "<tool kind>", "params": {{...}}}}
-You will receive each action's result, then continue. When you have the final
-answer for the user, reply with plain text and NO ACTION line. Never invent
-tool kinds or params not listed above."""
+
+# Calling tools
+- Prefer the NATIVE function calling interface when it is offered to you this turn.
+- If no native interface is offered, call a tool by replying with EXACTLY one line
+  and nothing else on it:
+  ACTION: {{"kind": "<tool kind>", "params": {{...}}}}
+- One action per reply. You will receive a RESULT line; only then continue.
+- Never invent tool kinds or params that are not listed above.
+- For file writes: use paths inside the workspace; relative paths are fine.
+- For research: fetch the most promising 1-3 URLs rather than many; stop when you
+  have enough to answer, and cite the URLs you fetched.
+- When you have the final answer for the user, reply with plain text and NO
+  ACTION line."""
+
+# per-tool guidance appended to the catalog (keeps descriptors themselves compact)
+_TOOL_GUIDANCE = {
+    "file_write": "Use for notes, drafts, code files, and any artifact the user asked to save. Content must be complete — writes replace the whole file.",
+    "web_fetch": "Read-only page fetch returning projected text. Use when the user asks about a specific URL, or when answering requires current/specific facts.",
+}
+
+
+@dataclass(frozen=True)
+class HostFacts:
+    """Environment facts the host (CLI/TUI) supplies for the agent system prompt.
+    Kept as typed data (09: typed structures over prose) and rendered into the
+    versioned ultron.agent.system bundle."""
+
+    identity_name: str = "ULTRON"
+    device: str = ""
+    now: str = ""
+    workspace: str = ""
+    memory_enabled: bool = False
+    active_plans: tuple[tuple[str, str], ...] = ()  # (plan name, next step) pairs
+
+    def memory_line(self) -> str:
+        if self.memory_enabled:
+            return ("You have persistent memory of past exchanges with this user; "
+                    "recent ones are provided under 'Things you remember'. Do not "
+                    "re-ask what you already know.")
+        return "Persistent memory is off for this conversation."
+
+    def plan_lines(self) -> str:
+        if not self.active_plans:
+            return "No active plans."
+        rows = "\n".join(f"- {name}: next step — {step}" for name, step in self.active_plans[:MAX_PLAN_LINES])
+        return ("If the user's request advances a plan below, do that step and say "
+                f"which plan/step you completed.\n{rows}")
 
 
 @dataclass(frozen=True)
@@ -58,7 +103,8 @@ def _tool_catalog(tools: list[ToolProvider]) -> str:
                 f"{name}{'?' if name not in (d.params_schema or {}).get('required', []) else ''}"
                 for name in (d.params_schema or {}).get("properties", {})
             ) or "no params"
-            lines.append(f"- {d.kind}({params}): {d.description} [{d.risk_class}]")
+            guidance = f" {_TOOL_GUIDANCE[d.kind]}" if d.kind in _TOOL_GUIDANCE else ""
+            lines.append(f"- {d.kind}({params}): {d.description}{guidance} [{d.risk_class}]")
     return "\n".join(lines)
 
 
@@ -117,6 +163,7 @@ def agent_turn(
     system: str | None = None,
     on_action: Callable[[ActionIntent], bool] | None = None,
     artifact_store=None,  # core.artifacts.ArtifactStore — large tool outputs offloaded to references (01: references over raw bulk)
+    host_facts: "HostFacts | None" = None,  # identity/time/workspace/plan facts for the system prompt
 ) -> AgentTurnResult:
     """One agentic exchange. Side effects only ever happen through
     policy(->approval)->tool->verify; everything the model says is a proposal."""
@@ -125,9 +172,24 @@ def agent_turn(
     risk_by_kind = {d.kind: d.risk_class for tool in tools for d in tool.describe()}
 
     native = isinstance(model, ToolCallingModel) and getattr(model.capabilities, "tool_calling", False)
-    system_parts = [system] if system else []
+    facts = host_facts or HostFacts(now=time.strftime("%Y-%m-%d %H:%M:%S"))
+    system_parts: list[str] = []
+    if system:
+        system_parts.append(system)
+    system_parts.append(AGENT_SYSTEM_TEMPLATE.render(
+        identity_name=facts.identity_name,
+        device=facts.device or "local machine",
+        now=facts.now or time.strftime("%Y-%m-%d %H:%M:%S"),
+        workspace=facts.workspace or "(host did not specify)",
+        memory_line=facts.memory_line(),
+        plan_lines=facts.plan_lines(),
+    ))
     if tools:
         system_parts.append(TOOL_PROTOCOL_HEADER.format(catalog=_tool_catalog(tools)))
+    record_id = AGENT_SYSTEM_TEMPLATE.record_id()
+    used = run.metadata.setdefault("instructions", [])
+    if record_id not in used:
+        used.append(record_id)
 
     memory_lines: list[str] = []
     if memory is not None:
@@ -176,7 +238,12 @@ def agent_turn(
         run.budget.used_model_calls += 1
 
         if not proposals:
-            break  # plain answer, done
+            if answer_text or not observations:
+                break  # plain answer, done (or nothing happened yet)
+            # actions ran but the model went silent — ask once more for the
+            # final answer (bounded by the round loop), instead of "(no answer)"
+            observations = list(observations) + ["SYSTEM: you completed actions but sent no final answer — reply to the user now."]
+            continue
 
         new_observations: list[str] = []
         for proposal in proposals:
